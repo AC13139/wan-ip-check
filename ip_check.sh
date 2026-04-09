@@ -11,15 +11,13 @@
 # Configuration Section
 # ---------------------
 
-# Discord webhook URL for sending notifications.
-# Read from environment variable DISCORD_WEBHOOK_URL, with a fallback default.
-# NOTE: Avoid using the default in production for security reasons.
+# Discord webhook URL for sending notifications (required).
 # IMPORTANT: Discord API is blocked in China, so a proxy is required.
-WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-REDACTED_WEBHOOK_URL}"
+WEBHOOK_URL="${DISCORD_WEBHOOK_URL}"
 
 # HTTP Proxy for Discord Notifications (Required for access from China)
 # This proxy is used ONLY for sending notifications to Discord.
-DISCORD_PROXY="REDACTED_PROXY"
+DISCORD_PROXY="${DISCORD_PROXY:?ERROR: DISCORD_PROXY environment variable is not set. Exiting.}"
 
 # Path to the file storing the last known public IP address.
 IP_FILE="./app/last_public_ip.txt"
@@ -29,7 +27,7 @@ IP_FILE="./app/last_public_ip.txt"
 NO_CHANGE_TRACK_FILE="./app/last_daily_summary_date.txt"
 # The time after which the daily summary should be sent (Format: HHMM, 24-hour clock).
 # Example: 2000 for 8 PM, 0830 for 8:30 AM.
-DAILY_SUMMARY_TIME="2000"
+DAILY_SUMMARY_TIME="${DAILY_SUMMARY_TIME:-2000}"
 # --------------------------------------------------
 
 # Ensure the directory for the IP files exists.
@@ -104,17 +102,17 @@ EOF
 
     # Send the notification using curl via PROXY.
     echo "$(date): Sending IP CHANGE notification to Discord via proxy ($DISCORD_PROXY)..."
-    curl -s -H "Content-Type: application/json" \
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+         -H "Content-Type: application/json" \
          -X POST \
-         #--interface $NOTIFICATION_INTERFACE \
          -x "$DISCORD_PROXY" \
          -d "$JSON_PAYLOAD" \
-         $WEBHOOK_URL > /dev/null
+         "$WEBHOOK_URL")
 
-    if [ $? -eq 0 ]; then
-        echo "$(date): Notification sent successfully."
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ] 2>/dev/null; then
+        echo "$(date): Notification sent successfully (HTTP $HTTP_CODE)."
     else
-        echo "$(date): ERROR: Failed to send notification via proxy."
+        echo "$(date): ERROR: Failed to send notification via proxy (HTTP $HTTP_CODE)."
     fi
 }
 
@@ -159,16 +157,17 @@ EOF
 
     # Send the notification using curl via PROXY.
     echo "$(date): Sending DAILY SUMMARY notification to Discord via proxy ($DISCORD_PROXY)..."
-    curl -s -H "Content-Type: application/json" \
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+         -H "Content-Type: application/json" \
          -X POST \
          -x "$DISCORD_PROXY" \
          -d "$JSON_PAYLOAD" \
-         $WEBHOOK_URL > /dev/null
+         "$WEBHOOK_URL")
 
-    if [ $? -eq 0 ]; then
-        echo "$(date): Daily summary sent successfully."
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ] 2>/dev/null; then
+        echo "$(date): Daily summary sent successfully (HTTP $HTTP_CODE)."
     else
-        echo "$(date): ERROR: Failed to send daily summary via proxy."
+        echo "$(date): ERROR: Failed to send daily summary via proxy (HTTP $HTTP_CODE)."
     fi
 }
 

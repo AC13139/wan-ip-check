@@ -5,7 +5,7 @@
 # address monitoring script with cron scheduling and Discord notifications.
 
 # Base Image: Use the official Alpine Linux image for minimal footprint.
-FROM alpine:latest
+FROM alpine:3.21
 
 # Working Directory: Set the application root directory.
 WORKDIR /app

@@ -1,0 +1,20 @@
+# Runtime state
+app/last_public_ip.txt
+app/last_daily_summary_date.txt
+app/cron.log
+
+# Secrets
+.env*
+!.env.example
+
+# Build artifacts
+*.tar
+
+# OS / IDE
+.DS_Store
+*.swp
+*~
+
+# Claude
+.claude/
+CLAUDE.md

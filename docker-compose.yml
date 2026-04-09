@@ -6,11 +6,14 @@ services:
     container_name: myIP_Mono
     cap_add:
       - NET_ADMIN
+    env_file:
+      - .env
     environment:
-      DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN" # Replace with your actual Discord webhook URL
-      IP_CHECK_SERVICE: "https://icanhazip.com" # Service for fetching public IP
-      IP_CHECK_INTERFACE: "eth0" # Network interface for IP checking (attached to mynetwork_eth0)
-      CRON_SCHEDULE: "*/5 * * * *" # Cron schedule for IP checks (default: every 5 minutes)
+      # These override .env values if set; remove to use .env defaults
+      IP_CHECK_SERVICE: "https://icanhazip.com"
+      IP_CHECK_INTERFACE: "eth0"
+      CRON_SCHEDULE: "*/5 * * * *"
+      DAILY_SUMMARY_TIME: "2000"
     dns:
       - 192.168.5.10 # DNS for mynetwork_eth0
       - 192.168.10.10 # DNS for mynetwork_eth1
