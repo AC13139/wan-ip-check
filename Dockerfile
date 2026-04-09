@@ -1,32 +1,19 @@
 # =============================================================================
-# Dockerfile for IP Address Monitor Container
+# Multi-stage Dockerfile for WAN IP Check (Go)
 # =============================================================================
-# This Dockerfile builds a lightweight Alpine-based container to run the IP
-# address monitoring script with cron scheduling and Discord notifications.
 
-# Base Image: Use the official Alpine Linux image for minimal footprint.
+# Stage 1: Build the Go binary
+FROM golang:1.24-alpine AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY *.go ./
+RUN CGO_ENABLED=0 go build -o wan-ip-check .
+
+# Stage 2: Minimal runtime image
 FROM alpine:3.21
-
-# Working Directory: Set the application root directory.
-WORKDIR /app
-
-# Dependencies: Install required packages for script execution and scheduling.
-# - bash: Shell interpreter for running scripts.
-# - curl: Tool for HTTP requests (IP fetching and webhook notifications).
-# - cronie: Cron daemon for task scheduling.
-# Also create a log directory and clean up cache to optimize image size.
-RUN apk update && \
-    apk add --no-cache bash curl cronie && \
-    mkdir -p /var/log/cron && \
+RUN apk add --no-cache ca-certificates iproute2 && \
     rm -rf /var/cache/apk/*
-
-# Application Files: Copy the IP monitoring script and Docker entrypoint script.
-COPY ip_check.sh /app/ip_check.sh
-COPY entrypoint.sh /app/entrypoint.sh
-
-# Permissions: Grant execute permissions to the scripts.
-RUN chmod +x /app/ip_check.sh /app/entrypoint.sh
-
-# Entrypoint: Define the container's startup command.
-# The entrypoint script configures cron and maintains the container's lifecycle.
-ENTRYPOINT ["/app/entrypoint.sh"]
+WORKDIR /app
+COPY --from=builder /build/wan-ip-check .
+ENTRYPOINT ["./wan-ip-check"]

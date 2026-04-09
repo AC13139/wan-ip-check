@@ -1,9 +1,8 @@
-version: "3.8"
-
 services:
   ip-monitor:
-    image: ip-notifier:latest
+    image: wan-ip-check:latest
     container_name: myIP_Mono
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
     env_file:
@@ -11,9 +10,9 @@ services:
     environment:
       # These override .env values if set; remove to use .env defaults
       IP_CHECK_SERVICE: "https://icanhazip.com"
-      IP_CHECK_INTERFACE: "eth0"
       CRON_SCHEDULE: "*/5 * * * *"
       DAILY_SUMMARY_TIME: "2000"
+      # Cloudflare and PBR settings are loaded from .env — see .env.example
     dns:
       - 192.168.5.10 # DNS for mynetwork_eth0
       - 192.168.10.10 # DNS for mynetwork_eth1

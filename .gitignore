@@ -1,7 +1,10 @@
 # Runtime state
 app/last_public_ip.txt
 app/last_daily_summary_date.txt
-app/cron.log
+
+# Go binary
+wan-ip-check
+/wan-ip-check
 
 # Secrets
 .env*
