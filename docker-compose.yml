@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  ip-monitor:
+    image: ip-notifier:latest
+    container_name: myIP_Mono
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DISCORD_WEBHOOK_URL: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN" # Replace with your actual Discord webhook URL
+      IP_CHECK_SERVICE: "https://icanhazip.com" # Service for fetching public IP
+      IP_CHECK_INTERFACE: "eth0" # Network interface for IP checking (attached to mynetwork_eth0)
+      CRON_SCHEDULE: "*/5 * * * *" # Cron schedule for IP checks (default: every 5 minutes)
+    dns:
+      - 192.168.5.10 # DNS for mynetwork_eth0
+      - 192.168.10.10 # DNS for mynetwork_eth1
+    networks:
+      mynetwork_eth0:
+        ipv4_address: 192.168.5.208
+      mynetwork_eth1:
+        ipv4_address: 192.168.10.208
+
+networks:
+  mynetwork_eth0:
+    external: true
+  mynetwork_eth1:
+    external: true
