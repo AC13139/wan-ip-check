@@ -75,8 +75,12 @@ func main() {
 		proxyClient = directClient // fallback to direct if no proxy configured
 	}
 
-	// Build action registry (executors registered in Phase 2)
+	// Build action registry and register all built-in executors
 	registry := NewActionRegistry()
+	registry.Register(&CFDNSExecutor{client: directClient})
+	registry.Register(&CFGatewayExecutor{client: directClient})
+	registry.Register(&DiscordExecutor{client: proxyClient})
+	registry.Register(&WebhookExecutor{client: directClient})
 
 	app := &App{
 		boot:         boot,
@@ -110,17 +114,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// TODO Phase 2: Start dispatcher (source-scoped event dispatch)
+	// Start dispatcher (source check scheduling + action execution)
+	dispatcher := NewDispatcher(app)
+	if err := dispatcher.Start(ctx); err != nil {
+		logger.Error("failed to start dispatcher", "error", err)
+		os.Exit(1)
+	}
+
 	// TODO Phase 3: Start HTTP server (API + Web UI on boot.Port)
 
-	logger.Info("wan-ip-check running (Phase 1: foundation only — dispatcher and HTTP server coming in Phase 2-3)")
+	logger.Info("wan-ip-check running", "port", boot.Port)
 
 	// Block until signal
 	<-ctx.Done()
-	logger.Info("shutdown signal received")
+	logger.Info("shutdown signal received, stopping...")
+	dispatcher.Stop()
 	logger.Info("shutdown complete")
-
-	_ = app // silence unused warning during Phase 1
 }
 
 // newHTTPClient creates an HTTP client with explicit transport settings.
