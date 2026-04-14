@@ -1,29 +1,47 @@
 services:
-  ip-monitor:
-    image: wan-ip-check:latest
-    container_name: myIP_Mono
+  wan-ip-check:
+    image: ac13139/wan-ip-check:latest
+    container_name: wan-ip-check
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
+    ports:
+      - "7373:7373"
     env_file:
       - .env
-    environment:
-      # These override .env values if set; remove to use .env defaults
-      IP_CHECK_SERVICE: "https://icanhazip.com"
-      CRON_SCHEDULE: "*/5 * * * *"
-      DAILY_SUMMARY_TIME: "2000"
-      # Cloudflare and PBR settings are loaded from .env — see .env.example
-    dns:
-      - 192.168.5.10 # DNS for mynetwork_eth0
-      - 192.168.10.10 # DNS for mynetwork_eth1
-    networks:
-      mynetwork_eth0:
-        ipv4_address: 192.168.5.208
-      mynetwork_eth1:
-        ipv4_address: 192.168.10.208
+    volumes:
+      - wan-ip-data:/app/data
 
-networks:
-  mynetwork_eth0:
-    external: true
-  mynetwork_eth1:
-    external: true
+volumes:
+  wan-ip-data:
+
+# ============================================================================
+# Advanced: Dual-network with Policy-Based Routing (PBR)
+# ============================================================================
+# If your setup requires separate network interfaces for IP checking vs
+# notification delivery (e.g., Discord routed through a different gateway),
+# uncomment and customize the section below.
+#
+# Most users do NOT need this — a single network with DISCORD_PROXY in .env
+# is sufficient.
+#
+#   wan-ip-check:
+#     cap_add:
+#       - NET_ADMIN     # required for PBR ip route/rule commands
+#     dns:
+#       - 192.168.x.x   # your DNS server(s)
+#     networks:
+#       net_primary:
+#         ipv4_address: 192.168.x.x
+#       net_secondary:
+#         ipv4_address: 192.168.x.x
+#
+# Then set in .env:
+#   NOTIFICATION_INTERFACE=eth1
+#   PBR_GATEWAY=192.168.x.1
+#   PBR_DEV=eth1
+#   PBR_TABLE=10
+#
+# networks:
+#   net_primary:
+#     external: true
+#   net_secondary:
+#     external: true
