@@ -31,6 +31,15 @@ type WebhookTemplateData struct {
 	Timestamp  string
 }
 
+// webhookFuncs provides template functions for safe JSON interpolation.
+// Usage in body_template: {{json .SourceName}} outputs a JSON-escaped string (with quotes).
+var webhookFuncs = template.FuncMap{
+	"json": func(v interface{}) string {
+		b, _ := json.Marshal(v)
+		return string(b)
+	},
+}
+
 func (e *WebhookExecutor) Type() string { return "webhook" }
 
 func (e *WebhookExecutor) SecretFields() []string { return nil }
@@ -39,7 +48,7 @@ func (e *WebhookExecutor) DefaultConfig() json.RawMessage {
 	cfg := webhookConfig{
 		Method:       "POST",
 		Headers:      map[string]string{"Content-Type": "application/json"},
-		BodyTemplate: `{"ip":"{{.NewIP}}","old":"{{.OldIP}}","source":"{{.SourceName}}","event":"{{.Event}}"}`,
+		BodyTemplate: `{"ip":{{json .NewIP}},"old":{{json .OldIP}},"source":{{json .SourceName}},"event":{{json .Event}}}`,
 	}
 	data, _ := json.Marshal(cfg)
 	return data
@@ -63,7 +72,7 @@ func (e *WebhookExecutor) ValidateConfig(raw json.RawMessage) error {
 		return fmt.Errorf("url is required")
 	}
 	if cfg.BodyTemplate != "" {
-		if _, err := template.New("test").Parse(cfg.BodyTemplate); err != nil {
+		if _, err := template.New("test").Funcs(webhookFuncs).Parse(cfg.BodyTemplate); err != nil {
 			return fmt.Errorf("invalid body_template: %w", err)
 		}
 	}
@@ -81,10 +90,10 @@ func (e *WebhookExecutor) Execute(ctx context.Context, event IPEvent, raw json.R
 		method = "POST"
 	}
 
-	// Render body template
+	// Render body template (with JSON-safe escaping via {{json .Field}})
 	var body string
 	if cfg.BodyTemplate != "" {
-		tmpl, err := template.New("body").Parse(cfg.BodyTemplate)
+		tmpl, err := template.New("body").Funcs(webhookFuncs).Parse(cfg.BodyTemplate)
 		if err != nil {
 			return fmt.Errorf("parsing template: %w", err)
 		}

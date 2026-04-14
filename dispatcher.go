@@ -61,10 +61,12 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		d.logger.Info("scheduled source", "source_id", s.ID, "name", s.Name, "schedule", s.Schedule)
 	}
 
-	// Run all sources once immediately
+	// Run all sources once synchronously before starting cron.
+	// This avoids racing with cron-scheduled runs and ensures first-run
+	// state is persisted before the scheduler fires.
 	for _, src := range sources {
 		if src.Enabled {
-			go d.checkSource(ctx, src.ID)
+			d.checkSource(ctx, src.ID)
 		}
 	}
 
@@ -107,7 +109,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		state.LastStatus = "failed"
 		state.ConsecutiveFailures++
 		state.LastError = err.Error()
-		d.db.UpdateSourceState(state)
+		if err := d.db.UpdateSourceState(state); err != nil {
+			logger.Error("failed to persist source state", "error", err)
+		}
 		logger.Error("IP detection failed", "error", err, "consecutive_failures", state.ConsecutiveFailures)
 		return
 	}
@@ -124,7 +128,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		state.LastObservedIP = newIP
 		state.LastStatus = "ok"
 		state.LastSummaryDate = now.Format("2006-01-02")
-		d.db.UpdateSourceState(state)
+		if err := d.db.UpdateSourceState(state); err != nil {
+			logger.Error("failed to persist source state", "error", err)
+		}
 		logger.Info("first run, IP saved", "ip", newIP)
 		return
 	}
@@ -134,7 +140,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		state.LastObservedIP = newIP
 		state.LastStatus = "changed"
 		state.LastSummaryDate = now.Format("2006-01-02") // suppress same-day summary
-		d.db.UpdateSourceState(state)
+		if err := d.db.UpdateSourceState(state); err != nil {
+			logger.Error("failed to persist source state", "error", err)
+		}
 		logger.Info("IP changed", "old", oldIP, "new", newIP)
 
 		event := IPEvent{
@@ -149,7 +157,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 	} else {
 		// IP unchanged
 		state.LastStatus = "ok"
-		d.db.UpdateSourceState(state)
+		if err := d.db.UpdateSourceState(state); err != nil {
+			logger.Error("failed to persist source state", "error", err)
+		}
 		logger.Debug("IP unchanged", "ip", newIP)
 
 		d.checkDailySummary(ctx, source, state, newIP, logger)
@@ -170,7 +180,10 @@ func (d *Dispatcher) checkDailySummary(ctx context.Context, source *Source, stat
 	now := time.Now().In(loc)
 
 	// Get daily summary time from settings
-	summaryTime, _ := d.db.GetSetting("daily_summary_time")
+	summaryTime, err := d.db.GetSetting("daily_summary_time")
+	if err != nil {
+		logger.Warn("failed to read daily_summary_time setting", "error", err)
+	}
 	if summaryTime == "" {
 		summaryTime = "2000"
 	}
@@ -199,7 +212,9 @@ func (d *Dispatcher) checkDailySummary(ctx context.Context, source *Source, stat
 
 	// Update summary date
 	state.LastSummaryDate = today
-	d.db.UpdateSourceState(state)
+	if err := d.db.UpdateSourceState(state); err != nil {
+		logger.Error("failed to persist summary date", "error", err)
+	}
 }
 
 // executeActions runs all linked actions for a source event, sequentially.

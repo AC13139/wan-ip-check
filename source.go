@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,6 +58,12 @@ func DefaultSourceConfig() SourceConfig {
 	}
 }
 
+// boundClients caches HTTP clients per bind config to avoid transport leaks.
+var (
+	boundClientsMu   sync.Mutex
+	boundClientsCache = make(map[string]*http.Client)
+)
+
 // DetectIP probes the configured URLs to determine the current public IP.
 // Uses the fallback strategy: try each URL in order, return first valid result.
 func DetectIP(ctx context.Context, cfg SourceConfig, baseClient *http.Client) (string, error) {
@@ -69,10 +76,10 @@ func DetectIP(ctx context.Context, cfg SourceConfig, baseClient *http.Client) (s
 		timeout = 10 * time.Second
 	}
 
-	// Build a client with optional interface/address binding
+	// Use cached bound client to avoid transport/connection leaks
 	client := baseClient
 	if cfg.BindInterface != "" || cfg.BindAddress != "" {
-		client = buildBoundClient(cfg, timeout)
+		client = getBoundClient(cfg, timeout)
 	}
 
 	var lastErr error
@@ -120,6 +127,20 @@ func probeIP(ctx context.Context, client *http.Client, url string, timeout time.
 	}
 
 	return ip, nil
+}
+
+// getBoundClient returns a cached HTTP client bound to a specific interface/address.
+func getBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
+	key := cfg.BindInterface + "|" + cfg.BindAddress
+	boundClientsMu.Lock()
+	defer boundClientsMu.Unlock()
+
+	if c, ok := boundClientsCache[key]; ok {
+		return c
+	}
+	c := buildBoundClient(cfg, timeout)
+	boundClientsCache[key] = c
+	return c
 }
 
 // buildBoundClient creates an HTTP client that binds to a specific interface or address.

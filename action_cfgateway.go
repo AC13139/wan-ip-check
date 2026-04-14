@@ -71,26 +71,38 @@ func (e *CFGatewayExecutor) Execute(ctx context.Context, event IPEvent, raw json
 		return fmt.Errorf("GET location failed: %s", cfGWErrMsg(getResp))
 	}
 
-	// PATCH networks only
+	// Extract location name from GET response (required for PUT)
+	var loc cfGWLocation
+	if err := json.Unmarshal(getResp.Result, &loc); err != nil {
+		return fmt.Errorf("parsing location response: %w", err)
+	}
+
+	// PUT with name (required) + updated networks
 	body := map[string]interface{}{
+		"name": loc.Name,
 		"networks": []map[string]string{
 			{"network": event.NewIP + "/32"},
 		},
 	}
-	patchResp, err := e.cfGWRequest(ctx, http.MethodPatch, url, cfg.APIToken, body)
+	putResp, err := e.cfGWRequest(ctx, http.MethodPut, url, cfg.APIToken, body)
 	if err != nil {
-		return fmt.Errorf("PATCH location failed: %w", err)
+		return fmt.Errorf("PUT location failed: %w", err)
 	}
-	if !patchResp.Success {
-		return fmt.Errorf("PATCH location failed: %s", cfGWErrMsg(patchResp))
+	if !putResp.Success {
+		return fmt.Errorf("PUT location failed: %s", cfGWErrMsg(putResp))
 	}
 
 	return nil
 }
 
 type cfGWResponse struct {
-	Success bool      `json:"success"`
-	Errors  []cfGWErr `json:"errors"`
+	Success bool            `json:"success"`
+	Result  json.RawMessage `json:"result"`
+	Errors  []cfGWErr       `json:"errors"`
+}
+
+type cfGWLocation struct {
+	Name string `json:"name"`
 }
 
 type cfGWErr struct {
