@@ -121,8 +121,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start HTTP server (API + future Web UI)
-	srv := NewServer(app, dispatcher)
+	// Start HTTP server (API + Web UI)
+	srv, err := NewServer(app, dispatcher)
+	if err != nil {
+		logger.Error("failed to create server", "error", err)
+		os.Exit(1)
+	}
 	go func() {
 		if err := srv.Start(); err != nil {
 			logger.Error("HTTP server failed", "error", err)

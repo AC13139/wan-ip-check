@@ -1,0 +1,59 @@
+{{define "header-actions"}}
+<div class="flex gap-sm">
+  {{range .ActionTypes}}
+  <a href="/actions/new?type={{.}}" class="btn btn-sm btn-secondary">+ {{.}}</a>
+  {{end}}
+</div>
+{{end}}
+
+{{define "content"}}
+{{if .Actions}}
+<div class="card-grid">
+  {{range .Actions}}
+  <div class="card{{if not .Action.Enabled}} disabled{{end}}" id="action-card-{{.Action.ID}}">
+    <div class="card-header">
+      <div>
+        <span class="card-title">{{.Action.Name}}</span>
+        <div class="type-label">{{.Action.Type}}</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" {{if .Action.Enabled}}checked{{end}}
+               hx-post="/ui/actions/{{.Action.ID}}/toggle"
+               hx-target="#action-card-{{.Action.ID}}"
+               hx-swap="outerHTML">
+        <span class="toggle-track"></span>
+        <span class="toggle-thumb"></span>
+      </label>
+    </div>
+    <div class="card-body">
+      {{if .LinkedSources}}
+      <div class="text-sm text-secondary mb-sm">
+        Linked from: {{range $i, $s := .LinkedSources}}{{if $i}}, {{end}}{{$s}}{{end}}
+      </div>
+      {{else}}
+      <div class="text-sm text-muted mb-sm">Not linked to any source</div>
+      {{end}}
+    </div>
+    <div class="card-footer">
+      <a href="/actions/{{.Action.ID}}" class="btn btn-sm btn-secondary">Edit</a>
+      <button class="btn btn-sm btn-secondary"
+              hx-post="/ui/actions/{{.Action.ID}}/test"
+              hx-target="#test-result-{{.Action.ID}}"
+              hx-swap="innerHTML">Test</button>
+      <span id="test-result-{{.Action.ID}}"></span>
+      <button class="btn btn-sm btn-danger"
+              hx-delete="/ui/actions/{{.Action.ID}}"
+              hx-target="#action-card-{{.Action.ID}}"
+              hx-swap="delete"
+              hx-confirm="Delete action '{{.Action.Name}}'?">Delete</button>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="empty-state">
+  <p>No actions configured. Actions define what happens when your IP changes.</p>
+  <a href="/actions/new?type=discord" class="btn btn-primary">Add Discord Action</a>
+</div>
+{{end}}
+{{end}}

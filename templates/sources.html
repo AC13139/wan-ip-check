@@ -1,0 +1,59 @@
+{{define "header-actions"}}
+<a href="/sources/new" class="btn btn-primary">+ Add Source</a>
+{{end}}
+
+{{define "content"}}
+{{if .Sources}}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:40px"></th>
+        <th>Name</th>
+        <th>IP</th>
+        <th>Schedule</th>
+        <th>Actions</th>
+        <th>Last Check</th>
+        <th style="width:60px">Enabled</th>
+        <th style="width:100px"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Sources}}
+      <tr id="source-row-{{.Source.ID}}">
+        <td><span class="status-dot {{.StatusClass}}"></span></td>
+        <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a></td>
+        <td class="mono">{{if .IP}}{{.IP}}{{else}}<span class="text-muted">—</span>{{end}}</td>
+        <td class="mono-sm">{{.Source.Schedule}}</td>
+        <td><span class="badge badge-muted">{{.ActionCount}}</span></td>
+        <td class="text-sm text-muted">{{.LastCheck}}</td>
+        <td>
+          <label class="toggle">
+            <input type="checkbox" {{if .Source.Enabled}}checked{{end}}
+                   hx-post="/ui/sources/{{.Source.ID}}/toggle"
+                   hx-target="#source-row-{{.Source.ID}}"
+                   hx-swap="outerHTML">
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+        </td>
+        <td class="flex gap-xs">
+          <a href="/sources/{{.Source.ID}}" class="btn btn-sm btn-secondary">Edit</a>
+          <button class="btn btn-sm btn-danger"
+                  hx-delete="/ui/sources/{{.Source.ID}}"
+                  hx-target="#source-row-{{.Source.ID}}"
+                  hx-swap="delete"
+                  hx-confirm="Delete source '{{.Source.Name}}'?">Del</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty-state">
+  <p>No sources configured.</p>
+  <a href="/sources/new" class="btn btn-primary">Add Source</a>
+</div>
+{{end}}
+{{end}}
