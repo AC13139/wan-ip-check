@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -19,6 +20,8 @@ type Dispatcher struct {
 	logger       *slog.Logger
 	cron         *cron.Cron
 	entryMap     map[int64]cron.EntryID // source ID → cron entry ID
+	sourceLocks  map[int64]*sync.Mutex  // per-source execution lock
+	locksMu      sync.Mutex
 }
 
 // NewDispatcher creates a new dispatcher.
@@ -31,6 +34,7 @@ func NewDispatcher(app *App) *Dispatcher {
 		proxyClient:  app.proxyClient,
 		logger:       app.logger,
 		entryMap:     make(map[int64]cron.EntryID),
+		sourceLocks:  make(map[int64]*sync.Mutex),
 	}
 }
 
@@ -83,7 +87,12 @@ func (d *Dispatcher) Stop() {
 }
 
 // checkSource runs the IP detection + action dispatch cycle for a single source.
+// Per-source mutex prevents concurrent execution from cron + manual API calls.
 func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
+	mu := d.getSourceLock(sourceID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	source, err := d.db.GetSource(sourceID)
 	if err != nil {
 		d.logger.Error("failed to load source", "source_id", sourceID, "error", err)
@@ -257,6 +266,17 @@ func (d *Dispatcher) executeActions(ctx context.Context, event IPEvent, logger *
 			d.logRun(event, sa, "success", "")
 		}
 	}
+}
+
+func (d *Dispatcher) getSourceLock(sourceID int64) *sync.Mutex {
+	d.locksMu.Lock()
+	defer d.locksMu.Unlock()
+	if mu, ok := d.sourceLocks[sourceID]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	d.sourceLocks[sourceID] = mu
+	return mu
 }
 
 func (d *Dispatcher) logRun(event IPEvent, sa SourceAction, status, errMsg string) {

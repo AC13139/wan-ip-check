@@ -26,6 +26,12 @@ func OpenDB(dataDir string, logger *slog.Logger) (*DB, error) {
 	}
 	conn.SetMaxOpenConns(1) // SQLite is single-writer
 
+	// Enable foreign key enforcement
+	if _, err := conn.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("enabling foreign keys: %w", err)
+	}
+
 	db := &DB{conn: conn, logger: logger}
 	if err := db.migrate(); err != nil {
 		conn.Close()

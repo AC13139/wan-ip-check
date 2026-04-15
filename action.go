@@ -120,7 +120,10 @@ func (r *ActionRegistry) Types() []string {
 	return types
 }
 
+const secretMask = "•••••"
+
 // EncryptActionSecrets encrypts the secret fields in an action's config JSON.
+// Fields set to the mask placeholder ("•••••") are skipped to avoid overwriting real secrets.
 func EncryptActionSecrets(configJSON json.RawMessage, secretFields []string, key []byte) (json.RawMessage, error) {
 	if len(secretFields) == 0 || len(key) == 0 {
 		return configJSON, nil
@@ -137,8 +140,11 @@ func EncryptActionSecrets(configJSON json.RawMessage, secretFields []string, key
 			continue
 		}
 		plaintext, ok := val.(string)
-		if !ok || plaintext == "" {
-			continue
+		if !ok || plaintext == "" || plaintext == secretMask {
+			continue // skip mask placeholder — don't overwrite real secret
+		}
+		if isEncrypted(plaintext) {
+			continue // already encrypted
 		}
 		encrypted, err := Encrypt(plaintext, key)
 		if err != nil {

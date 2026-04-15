@@ -121,13 +121,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO Phase 3: Start HTTP server (API + Web UI on boot.Port)
+	// Start HTTP server (API + future Web UI)
+	srv := NewServer(app, dispatcher)
+	go func() {
+		if err := srv.Start(); err != nil {
+			logger.Error("HTTP server failed", "error", err)
+		}
+	}()
 
 	logger.Info("wan-ip-check running", "port", boot.Port)
 
 	// Block until signal
 	<-ctx.Done()
 	logger.Info("shutdown signal received, stopping...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	srv.Shutdown(shutdownCtx)
 	dispatcher.Stop()
 	logger.Info("shutdown complete")
 }

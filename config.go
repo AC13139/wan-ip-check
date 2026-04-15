@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 )
+
+var dailySummaryTimeRe = regexp.MustCompile(`^\d{4}$`)
 
 // BootConfig holds infrastructure-level config loaded from env vars.
 // These are NOT stored in the database — they're container/host-level settings.
