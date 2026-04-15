@@ -38,8 +38,41 @@ func NewDispatcher(app *App) *Dispatcher {
 	}
 }
 
-// Start loads all enabled sources and schedules them.
+// Start loads all enabled sources, runs them once, and starts the cron scheduler.
 func (d *Dispatcher) Start(ctx context.Context) error {
+	// Run all sources once synchronously before starting cron.
+	sources, err := d.db.ListSources()
+	if err != nil {
+		return err
+	}
+	for _, src := range sources {
+		if src.Enabled {
+			d.checkSource(ctx, src.ID)
+		}
+	}
+
+	return d.startCron(ctx)
+}
+
+// Stop gracefully stops the dispatcher.
+func (d *Dispatcher) Stop() {
+	if d.cron != nil {
+		<-d.cron.Stop().Done()
+	}
+}
+
+// Reload stops the current cron, re-reads sources from DB, and reschedules.
+// Called by API handlers after source create/update/delete.
+func (d *Dispatcher) Reload(ctx context.Context) error {
+	d.logger.Info("reloading dispatcher")
+	if d.cron != nil {
+		<-d.cron.Stop().Done()
+	}
+	d.entryMap = make(map[int64]cron.EntryID)
+	return d.startCron(ctx)
+}
+
+func (d *Dispatcher) startCron(ctx context.Context) error {
 	d.cron = cron.New(
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
@@ -53,8 +86,19 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		if !src.Enabled {
 			continue
 		}
-		s := src // capture for closure
-		entryID, err := d.cron.AddFunc(s.Schedule, func() {
+		s := src
+
+		// Apply per-source timezone to cron
+		loc := time.Now().Location()
+		if s.Timezone != "" && s.Timezone != "Local" {
+			if parsed, err := time.LoadLocation(s.Timezone); err == nil {
+				loc = parsed
+			}
+		}
+
+		// Wrap schedule with timezone
+		schedule := s.Schedule
+		entryID, err := d.cron.AddFunc("CRON_TZ="+loc.String()+" "+schedule, func() {
 			d.checkSource(ctx, s.ID)
 		})
 		if err != nil {
@@ -62,28 +106,12 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 			continue
 		}
 		d.entryMap[s.ID] = entryID
-		d.logger.Info("scheduled source", "source_id", s.ID, "name", s.Name, "schedule", s.Schedule)
-	}
-
-	// Run all sources once synchronously before starting cron.
-	// This avoids racing with cron-scheduled runs and ensures first-run
-	// state is persisted before the scheduler fires.
-	for _, src := range sources {
-		if src.Enabled {
-			d.checkSource(ctx, src.ID)
-		}
+		d.logger.Info("scheduled source", "source_id", s.ID, "name", s.Name, "schedule", s.Schedule, "timezone", loc)
 	}
 
 	d.cron.Start()
 	d.logger.Info("dispatcher started", "sources", len(d.entryMap))
 	return nil
-}
-
-// Stop gracefully stops the dispatcher.
-func (d *Dispatcher) Stop() {
-	if d.cron != nil {
-		<-d.cron.Stop().Done()
-	}
 }
 
 // checkSource runs the IP detection + action dispatch cycle for a single source.
@@ -144,6 +172,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		return
 	}
 
+	// Retry any previously failed actions for this source
+	d.retryFailed(ctx, sourceID, state.LastObservedIP, logger)
+
 	if newIP != oldIP {
 		// IP changed
 		state.LastObservedIP = newIP
@@ -172,6 +203,11 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		logger.Debug("IP unchanged", "ip", newIP)
 
 		d.checkDailySummary(ctx, source, state, newIP, logger)
+	}
+
+	// Prune old action_runs to prevent unbounded growth (keep last 10000)
+	if err := d.db.PruneActionRuns(10000); err != nil {
+		logger.Warn("failed to prune action runs", "error", err)
 	}
 }
 
@@ -264,6 +300,48 @@ func (d *Dispatcher) executeActions(ctx context.Context, event IPEvent, logger *
 		} else {
 			actionLogger.Info("action succeeded")
 			d.logRun(event, sa, "success", "")
+		}
+	}
+}
+
+// retryFailed re-executes actions that failed on the previous check for this source.
+func (d *Dispatcher) retryFailed(ctx context.Context, sourceID int64, currentIP string, logger *slog.Logger) {
+	failedRuns, err := d.db.GetFailedRuns(sourceID)
+	if err != nil || len(failedRuns) == 0 {
+		return
+	}
+
+	logger.Info("retrying failed actions", "count", len(failedRuns))
+	for _, run := range failedRuns {
+		executor, err := d.registry.Get(run.ActionType)
+		if err != nil {
+			continue
+		}
+
+		action, err := d.db.GetAction(run.ActionID)
+		if err != nil {
+			continue
+		}
+
+		decryptedConfig, err := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), d.encKey)
+		if err != nil {
+			continue
+		}
+
+		event := IPEvent{
+			SourceID:   sourceID,
+			SourceName: "retry",
+			EventType:  run.EventType,
+			OldIP:      run.OldIP,
+			NewIP:      run.NewIP,
+			Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		}
+
+		if err := executor.Execute(ctx, event, decryptedConfig); err != nil {
+			logger.Warn("retry still failed", "action_id", run.ActionID, "error", err)
+		} else {
+			logger.Info("retry succeeded", "action_id", run.ActionID)
+			d.db.ClearRetryFlag(run.ID)
 		}
 	}
 }

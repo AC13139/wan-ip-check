@@ -111,6 +111,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src.ID = id
+	s.dispatcher.Reload(r.Context())
 	writeJSON(w, http.StatusCreated, src)
 }
 
@@ -188,6 +189,7 @@ func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update source")
 		return
 	}
+	s.dispatcher.Reload(r.Context())
 	writeJSON(w, http.StatusOK, existing)
 }
 
@@ -201,6 +203,7 @@ func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete source")
 		return
 	}
+	s.dispatcher.Reload(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -571,14 +574,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	allowed := map[string]bool{"daily_summary_time": true, "timezone": true}
+
+	// Validate ALL settings before writing ANY (atomic semantics)
 	for k, v := range settings {
 		if !allowed[k] {
 			writeError(w, http.StatusBadRequest, "unknown setting: "+k)
 			return
 		}
-		// Validate values
 		if k == "daily_summary_time" {
-			if !dailySummaryTimeRe.MatchString(v) || v[:2] > "23" || v[2:] > "59" {
+			if !dailySummaryTimeRe.MatchString(v) || len(v) != 4 || v[:2] > "23" || v[2:] > "59" {
 				writeError(w, http.StatusBadRequest, "daily_summary_time must be valid HHMM (0000-2359)")
 				return
 			}
@@ -589,6 +593,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+	// All valid — write
+	for k, v := range settings {
 		if err := s.app.db.SetSetting(k, v); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to save setting: "+k)
 			return

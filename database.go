@@ -143,7 +143,14 @@ func (db *DB) CreateSource(s *Source) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("marshaling source config: %w", err)
 	}
-	result, err := db.conn.Exec(
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	result, err := tx.Exec(
 		"INSERT INTO sources (name, enabled, schedule, timezone, config) VALUES (?, ?, ?, ?, ?)",
 		s.Name, s.Enabled, s.Schedule, s.Timezone, string(configJSON),
 	)
@@ -152,11 +159,11 @@ func (db *DB) CreateSource(s *Source) (int64, error) {
 	}
 	id, _ := result.LastInsertId()
 
-	// Initialize source_state
-	_, err = db.conn.Exec(
-		"INSERT INTO source_state (source_id) VALUES (?)", id,
-	)
-	return id, err
+	if _, err := tx.Exec("INSERT INTO source_state (source_id) VALUES (?)", id); err != nil {
+		return 0, fmt.Errorf("creating source state: %w", err)
+	}
+
+	return id, tx.Commit()
 }
 
 func (db *DB) GetSource(id int64) (*Source, error) {
@@ -428,6 +435,50 @@ func (db *DB) GetRecentRuns(sourceID int64, limit int) ([]ActionRun, error) {
 	return runs, rows.Err()
 }
 
+// GetFailedRuns returns action runs that need retry for a source.
+func (db *DB) GetFailedRuns(sourceID int64) ([]ActionRunWithType, error) {
+	rows, err := db.conn.Query(
+		`SELECT ar.id, ar.source_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip, a.type
+		 FROM action_runs ar JOIN actions a ON a.id = ar.action_id
+		 WHERE ar.source_id = ? AND ar.needs_retry = 1
+		 ORDER BY ar.executed_at ASC LIMIT 10`,
+		sourceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []ActionRunWithType
+	for rows.Next() {
+		var r ActionRunWithType
+		var oldIP, newIP sql.NullString
+		if err := rows.Scan(&r.ID, &r.SourceID, &r.ActionID, &r.EventType, &oldIP, &newIP, &r.ActionType); err != nil {
+			return nil, err
+		}
+		r.OldIP = oldIP.String
+		r.NewIP = newIP.String
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+// ClearRetryFlag marks an action run as no longer needing retry.
+func (db *DB) ClearRetryFlag(runID int64) error {
+	_, err := db.conn.Exec("UPDATE action_runs SET needs_retry = 0, status = 'success' WHERE id = ?", runID)
+	return err
+}
+
+// PruneActionRuns deletes old action run entries beyond the retention limit.
+func (db *DB) PruneActionRuns(maxRows int) error {
+	_, err := db.conn.Exec(
+		`DELETE FROM action_runs WHERE id NOT IN (
+			SELECT id FROM action_runs ORDER BY executed_at DESC LIMIT ?
+		)`, maxRows,
+	)
+	return err
+}
+
 // --- Helpers ---
 
 func nullStr(s string) sql.NullString {
@@ -441,5 +492,5 @@ func nullTime(t time.Time) sql.NullString {
 	if t.IsZero() {
 		return sql.NullString{}
 	}
-	return sql.NullString{String: t.Format(time.DateTime), Valid: true}
+	return sql.NullString{String: t.UTC().Format(time.DateTime), Valid: true}
 }

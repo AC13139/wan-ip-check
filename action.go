@@ -45,6 +45,17 @@ type ActionRun struct {
 	ExecutedAt time.Time `json:"executed_at"`
 }
 
+// ActionRunWithType extends ActionRun with the action's type (for retry dispatch).
+type ActionRunWithType struct {
+	ID         int64  `json:"id"`
+	SourceID   int64  `json:"source_id"`
+	ActionID   int64  `json:"action_id"`
+	EventType  string `json:"event_type"`
+	OldIP      string `json:"old_ip"`
+	NewIP      string `json:"new_ip"`
+	ActionType string `json:"action_type"`
+}
+
 // IPEvent carries event data passed to action executors.
 type IPEvent struct {
 	SourceID   int64  `json:"source_id"`

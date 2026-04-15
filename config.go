@@ -142,10 +142,11 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 		}
 		configJSON, _ := json.Marshal(configMap)
 
-		// Encrypt secrets
+		// Encrypt secrets — fail if encryption fails (don't store unencrypted)
 		configJSON, err := EncryptActionSecrets(configJSON, []string{"webhook_url"}, encKey)
 		if err != nil {
-			logger.Warn("failed to encrypt Discord config", "error", err)
+			logger.Error("failed to encrypt Discord config, skipping action", "error", err)
+			return
 		}
 
 		action := &Action{Type: "discord", Name: "Discord", Enabled: true, ConfigJSON: configJSON}
@@ -178,7 +179,12 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 			"record_ids": ids,
 		}
 		configJSON, _ := json.Marshal(configMap)
-		configJSON, _ = EncryptActionSecrets(configJSON, []string{"api_token"}, encKey)
+		var encErr error
+		configJSON, encErr = EncryptActionSecrets(configJSON, []string{"api_token"}, encKey)
+		if encErr != nil {
+			logger.Error("failed to encrypt CF DNS config, skipping", "error", encErr)
+			return
+		}
 
 		action := &Action{Type: "cloudflare_dns", Name: "Cloudflare DNS", Enabled: true, ConfigJSON: configJSON}
 		actionID, err := db.CreateAction(action)
@@ -200,7 +206,12 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 			"location_id": cfLocationID,
 		}
 		configJSON, _ := json.Marshal(configMap)
-		configJSON, _ = EncryptActionSecrets(configJSON, []string{"api_token"}, encKey)
+		var encErr error
+		configJSON, encErr = EncryptActionSecrets(configJSON, []string{"api_token"}, encKey)
+		if encErr != nil {
+			logger.Error("failed to encrypt CF Gateway config, skipping", "error", encErr)
+			return
+		}
 
 		action := &Action{Type: "cloudflare_gateway", Name: "Cloudflare Gateway", Enabled: true, ConfigJSON: configJSON}
 		actionID, err := db.CreateAction(action)

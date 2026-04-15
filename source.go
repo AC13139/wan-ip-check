@@ -131,7 +131,7 @@ func probeIP(ctx context.Context, client *http.Client, url string, timeout time.
 
 // getBoundClient returns a cached HTTP client bound to a specific interface/address.
 func getBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
-	key := cfg.BindInterface + "|" + cfg.BindAddress
+	key := fmt.Sprintf("%s|%s|%s", cfg.BindInterface, cfg.BindAddress, timeout)
 	boundClientsMu.Lock()
 	defer boundClientsMu.Unlock()
 

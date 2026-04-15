@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -139,8 +140,10 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func decodeJSON(r *http.Request, v interface{}) error {
+	// Limit body to 1MB to prevent memory abuse
+	limited := io.LimitReader(r.Body, 1<<20)
 	defer r.Body.Close()
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	if err := json.NewDecoder(limited).Decode(v); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return nil

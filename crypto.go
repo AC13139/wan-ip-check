@@ -35,7 +35,8 @@ func LoadOrGenerateKey(dataDir string, logger *slog.Logger) ([]byte, error) {
 
 	// 2. Try key file
 	keyPath := filepath.Join(dataDir, encryptionKeyFile)
-	if data, err := os.ReadFile(keyPath); err == nil {
+	data, err := os.ReadFile(keyPath)
+	if err == nil {
 		key, err := hex.DecodeString(strings.TrimSpace(string(data)))
 		if err != nil || len(key) != keySize {
 			return nil, fmt.Errorf("encryption key file %s is corrupted", keyPath)
@@ -43,8 +44,12 @@ func LoadOrGenerateKey(dataDir string, logger *slog.Logger) ([]byte, error) {
 		logger.Info("encryption key loaded from file", "path", keyPath)
 		return key, nil
 	}
+	if !os.IsNotExist(err) {
+		// File exists but can't be read — don't silently generate a new key
+		return nil, fmt.Errorf("reading encryption key file %s: %w", keyPath, err)
+	}
 
-	// 3. Auto-generate
+	// 3. Auto-generate (file doesn't exist)
 	key := make([]byte, keySize)
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("generating encryption key: %w", err)
