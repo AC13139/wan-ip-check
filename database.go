@@ -479,6 +479,140 @@ func (db *DB) PruneActionRuns(maxRows int) error {
 	return err
 }
 
+// --- UI Queries (joined, filtered, paginated) ---
+
+// HistoryFilter defines filter/pagination parameters for history queries.
+type HistoryFilter struct {
+	SourceID  int64
+	EventType string
+	Status    string
+	Limit     int
+	Offset    int
+}
+
+// ActionRunJoined extends ActionRun with source and action names.
+type ActionRunJoined struct {
+	ActionRun
+	SourceName string
+	ActionName string
+}
+
+// GetRecentRunsJoined returns filtered, paginated action runs with joined names.
+func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int, error) {
+	where := "1=1"
+	args := []interface{}{}
+
+	if filter.SourceID > 0 {
+		where += " AND ar.source_id = ?"
+		args = append(args, filter.SourceID)
+	}
+	if filter.EventType != "" {
+		where += " AND ar.event_type = ?"
+		args = append(args, filter.EventType)
+	}
+	if filter.Status != "" {
+		where += " AND ar.status = ?"
+		args = append(args, filter.Status)
+	}
+
+	// Count total matching rows
+	var total int
+	countQuery := "SELECT COUNT(*) FROM action_runs ar WHERE " + where
+	if err := db.conn.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting runs: %w", err)
+	}
+
+	// Fetch page
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := fmt.Sprintf(`
+		SELECT ar.id, ar.source_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip,
+		       ar.status, ar.needs_retry, ar.error_msg, ar.executed_at,
+		       COALESCE(s.name, '?') AS source_name,
+		       COALESCE(a.name, '?') AS action_name
+		FROM action_runs ar
+		LEFT JOIN sources s ON s.id = ar.source_id
+		LEFT JOIN actions a ON a.id = ar.action_id
+		WHERE %s
+		ORDER BY ar.executed_at DESC
+		LIMIT ? OFFSET ?`, where)
+
+	pageArgs := append(args, limit, offset)
+	rows, err := db.conn.Query(query, pageArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying runs: %w", err)
+	}
+	defer rows.Close()
+
+	var runs []ActionRunJoined
+	for rows.Next() {
+		var r ActionRunJoined
+		var oldIP, newIP, errMsg sql.NullString
+		if err := rows.Scan(&r.ID, &r.SourceID, &r.ActionID, &r.EventType,
+			&oldIP, &newIP, &r.Status, &r.NeedsRetry, &errMsg, &r.ExecutedAt,
+			&r.SourceName, &r.ActionName); err != nil {
+			return nil, 0, fmt.Errorf("scanning run: %w", err)
+		}
+		r.OldIP = oldIP.String
+		r.NewIP = newIP.String
+		r.ErrorMsg = errMsg.String
+		runs = append(runs, r)
+	}
+	return runs, total, rows.Err()
+}
+
+// GetSourceLinkedActionCount returns the count of enabled actions linked to a source.
+func (db *DB) GetSourceLinkedActionCount(sourceID int64) (int, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM source_actions WHERE source_id = ? AND enabled = 1",
+		sourceID,
+	).Scan(&count)
+	return count, err
+}
+
+// GetActionLinkedSourceCount returns the count of sources linked to an action.
+func (db *DB) GetActionLinkedSourceCount(actionID int64) (int, error) {
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM source_actions WHERE action_id = ? AND enabled = 1",
+		actionID,
+	).Scan(&count)
+	return count, err
+}
+
+// GetActionLinkedSources returns the names of sources linked to an action.
+func (db *DB) GetActionLinkedSources(actionID int64) ([]string, error) {
+	rows, err := db.conn.Query(
+		`SELECT s.name FROM source_actions sa
+		 JOIN sources s ON s.id = sa.source_id
+		 WHERE sa.action_id = ? AND sa.enabled = 1
+		 ORDER BY s.name`,
+		actionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
 // --- Helpers ---
 
 func nullStr(s string) sql.NullString {
