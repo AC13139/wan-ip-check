@@ -6,9 +6,21 @@ app/last_daily_summary_date.txt
 wan-ip-check
 /wan-ip-check
 
+# Go dev artifacts
+coverage.out
+*.prof
+__debug_bin*
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Secrets
 .env*
 !.env.example
+*.key
 
 # Build artifacts
 *.tar
@@ -17,7 +29,23 @@ wan-ip-check
 .DS_Store
 *.swp
 *~
+.vscode/
+.idea/
+*.code-workspace
 
-# Claude
+# Docker local overrides
+docker-compose.override.yml
+
+# Temp / logs
+tmp/
+*.log
+
+# Local design / agent guidance
+DESIGN.md
+AGENTS.md
+
+# Claude / Codex
 .claude/
+.codex
+.codex/
 CLAUDE.md

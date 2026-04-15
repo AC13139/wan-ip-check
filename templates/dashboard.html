@@ -1,0 +1,79 @@
+{{define "content"}}
+{{if .Sources}}
+<div class="card-grid mb-lg">
+  {{range .Sources}}
+  <div class="card" id="source-card-{{.Source.ID}}">
+    <div class="card-header">
+      <div class="flex-center gap-sm">
+        <span class="status-dot {{.StatusClass}} pulse"></span>
+        <span class="card-title">{{.Source.Name}}</span>
+      </div>
+      <button class="btn btn-sm btn-secondary"
+              hx-post="/ui/sources/{{.Source.ID}}/check"
+              hx-target="#source-card-{{.Source.ID}}"
+              hx-swap="outerHTML">Check Now</button>
+    </div>
+    <div class="card-body">
+      {{if .IP}}
+      <div class="ip-display">{{.IP}}</div>
+      {{else}}
+      <div class="text-muted">No IP detected yet</div>
+      {{end}}
+    </div>
+    <div class="card-footer flex-between">
+      <div class="flex-center gap-md">
+        {{if .LastCheck}}
+        <span class="text-sm text-muted">Last check: {{.LastCheck}}</span>
+        {{end}}
+        <span class="badge {{.StatusBadgeClass}}">{{.StatusText}}</span>
+      </div>
+      <div class="flex-center gap-sm text-sm text-muted">
+        <span class="mono-sm">{{.Source.Schedule}}</span>
+        <span>{{.ActionCount}} actions</span>
+      </div>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<div class="empty-state">
+  <p>No sources configured. Add your first source to start monitoring.</p>
+  <a href="/sources/new" class="btn btn-primary">Add Source</a>
+</div>
+{{end}}
+
+{{if .RecentRuns}}
+<h2 class="section-title">Recent Events</h2>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Source</th>
+        <th>Event</th>
+        <th>Action</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentRuns}}
+      <tr>
+        <td class="mono-sm">{{.ExecutedAt.Format "2006-01-02 15:04"}}</td>
+        <td>{{.SourceName}}</td>
+        <td>
+          {{if eq .EventType "ip_changed"}}<span class="badge badge-info">ip_changed</span>
+          {{else}}<span class="badge badge-muted">daily_summary</span>{{end}}
+        </td>
+        <td>{{.ActionName}}</td>
+        <td>
+          {{if eq .Status "success"}}<span class="badge badge-success">success</span>
+          {{else if eq .Status "failed"}}<span class="badge badge-error">failed</span>
+          {{else}}<span class="badge badge-muted">{{.Status}}</span>{{end}}
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}

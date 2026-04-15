@@ -1,29 +1,14 @@
 services:
-  ip-monitor:
-    image: wan-ip-check:latest
-    container_name: myIP_Mono
+  wan-ip-check:
+    image: ac13139/wan-ip-check:latest
+    container_name: wan-ip-check
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
+    ports:
+      - "7373:7373"
     env_file:
       - .env
-    environment:
-      # These override .env values if set; remove to use .env defaults
-      IP_CHECK_SERVICE: "https://icanhazip.com"
-      CRON_SCHEDULE: "*/5 * * * *"
-      DAILY_SUMMARY_TIME: "2000"
-      # Cloudflare and PBR settings are loaded from .env — see .env.example
-    dns:
-      - 192.168.5.10 # DNS for mynetwork_eth0
-      - 192.168.10.10 # DNS for mynetwork_eth1
-    networks:
-      mynetwork_eth0:
-        ipv4_address: 192.168.5.208
-      mynetwork_eth1:
-        ipv4_address: 192.168.10.208
+    volumes:
+      - wan-ip-data:/app/data
 
-networks:
-  mynetwork_eth0:
-    external: true
-  mynetwork_eth1:
-    external: true
+volumes:
+  wan-ip-data:

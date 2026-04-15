@@ -1,0 +1,94 @@
+{{define "content"}}
+<form {{if .IsEdit}}hx-post="/ui/actions/{{.Action.ID}}"{{else}}hx-post="/ui/actions"{{end}}
+      hx-target="body">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Action Details</h3>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input type="text" name="name" class="form-input" required
+               value="{{if .IsEdit}}{{.Action.Name}}{{end}}"
+               placeholder="e.g., My Discord">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        {{if .IsEdit}}
+        <input type="text" class="form-input mono" value="{{.ActionType}}" disabled>
+        <input type="hidden" name="type" value="{{.ActionType}}">
+        {{else}}
+        <select name="type" class="form-select" required
+                hx-get="/ui/action-schema"
+                hx-target="#config-fields"
+                hx-swap="innerHTML"
+                hx-include="[name='type']">
+          <option value="">Select type...</option>
+          {{range .AllTypes}}
+          <option value="{{.}}" {{if eq . $.ActionType}}selected{{end}}>{{.}}</option>
+          {{end}}
+        </select>
+        {{end}}
+      </div>
+    </div>
+    {{if .IsEdit}}
+    <div class="form-group">
+      <label class="form-label">Enabled</label>
+      <label class="toggle">
+        <input type="checkbox" name="enabled" value="true" {{if .Action.Enabled}}checked{{end}}>
+        <span class="toggle-track"></span>
+        <span class="toggle-thumb"></span>
+      </label>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Configuration</h3>
+    <div id="config-fields">
+      {{range .Schema}}
+      <div class="form-group">
+        <label class="form-label">{{.Label}}{{if .Required}} *{{end}}</label>
+        {{if eq .Type "password"}}
+        <input type="password" name="config_{{.Name}}" class="form-input mono"
+               value="{{index $.ConfigValues .Name}}"
+               {{if .Required}}required{{end}}
+               placeholder="{{.Placeholder}}">
+        {{else if eq .Type "textarea"}}
+        <textarea name="config_{{.Name}}" class="form-textarea mono"
+                  {{if .Required}}required{{end}}
+                  placeholder="{{.Placeholder}}">{{index $.ConfigValues .Name}}</textarea>
+        {{else if eq .Type "select"}}
+        <select name="config_{{.Name}}" class="form-select">
+          <option value="POST" {{if eq (index $.ConfigValues .Name) "POST"}}selected{{end}}>POST</option>
+          <option value="GET" {{if eq (index $.ConfigValues .Name) "GET"}}selected{{end}}>GET</option>
+          <option value="PUT" {{if eq (index $.ConfigValues .Name) "PUT"}}selected{{end}}>PUT</option>
+          <option value="PATCH" {{if eq (index $.ConfigValues .Name) "PATCH"}}selected{{end}}>PATCH</option>
+        </select>
+        {{else if eq .Type "tags"}}
+        <input type="text" name="config_{{.Name}}" class="form-input mono"
+               value="{{index $.ConfigValues .Name}}"
+               {{if .Required}}required{{end}}
+               placeholder="{{.Placeholder}}">
+        <div class="form-help">Comma-separated values</div>
+        {{else}}
+        <input type="text" name="config_{{.Name}}" class="form-input{{if .IsSecret}} mono{{end}}"
+               value="{{index $.ConfigValues .Name}}"
+               {{if .Required}}required{{end}}
+               placeholder="{{.Placeholder}}">
+        {{end}}
+        {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
+      </div>
+      {{end}}
+      {{if not .Schema}}
+      <p class="text-muted">Select an action type to see configuration fields.</p>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="flex gap-sm">
+    <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Create Action{{end}}</button>
+    <a href="/actions" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{{end}}

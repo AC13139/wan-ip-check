@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} — wan-ip-check</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="/static/htmx.min.js"></script>
+  <meta name="csrf-token" content="{{.CSRFToken}}">
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      document.body.addEventListener('htmx:configRequest', function(e) {
+        var token = document.querySelector('meta[name="csrf-token"]');
+        if (token) { e.detail.headers['X-CSRF-Token'] = token.content; }
+      });
+    });
+  </script>
+</head>
+<body>
+  <div class="app-layout">
+    <nav class="sidebar">
+      <div class="sidebar-brand">
+        <span>wan</span>-ip-check
+      </div>
+      <div class="sidebar-nav">
+        <a href="/" class="nav-item{{if eq .Active "dashboard"}} active{{end}}">Dashboard</a>
+        <a href="/sources" class="nav-item{{if eq .Active "sources"}} active{{end}}">Sources</a>
+        <a href="/actions" class="nav-item{{if eq .Active "actions"}} active{{end}}">Actions</a>
+        <a href="/history" class="nav-item{{if eq .Active "history"}} active{{end}}">History</a>
+        <a href="/settings" class="nav-item{{if eq .Active "settings"}} active{{end}}">Settings</a>
+      </div>
+      <div class="sidebar-footer">v2.0.0-alpha</div>
+    </nav>
+    <div class="content">
+      <div class="page-header">
+        <h1 class="page-title">{{.Title}}</h1>
+        {{block "header-actions" .}}{{end}}
+      </div>
+      <div class="page-body">
+        {{if .Flash}}<div class="badge badge-success mb-lg">{{.Flash}}</div>{{end}}
+        {{if .Error}}<div class="badge badge-error mb-lg">{{.Error}}</div>{{end}}
+        {{block "content" .}}{{end}}
+      </div>
+    </div>
+  </div>
+</body>
+</html>

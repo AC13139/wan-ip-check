@@ -1,0 +1,27 @@
+{{range .}}
+<div class="form-group">
+  <label class="form-label">{{.Label}}{{if .Required}} *{{end}}</label>
+  {{if eq .Type "password"}}
+  <input type="password" name="config_{{.Name}}" class="form-input mono"
+         {{if .Required}}required{{end}} placeholder="{{.Placeholder}}">
+  {{else if eq .Type "textarea"}}
+  <textarea name="config_{{.Name}}" class="form-textarea mono"
+            {{if .Required}}required{{end}} placeholder="{{.Placeholder}}"></textarea>
+  {{else if eq .Type "select"}}
+  <select name="config_{{.Name}}" class="form-select">
+    <option value="POST">POST</option>
+    <option value="GET">GET</option>
+    <option value="PUT">PUT</option>
+    <option value="PATCH">PATCH</option>
+  </select>
+  {{else if eq .Type "tags"}}
+  <input type="text" name="config_{{.Name}}" class="form-input mono"
+         {{if .Required}}required{{end}} placeholder="{{.Placeholder}}">
+  <div class="form-help">Comma-separated values</div>
+  {{else}}
+  <input type="text" name="config_{{.Name}}" class="form-input"
+         {{if .Required}}required{{end}} placeholder="{{.Placeholder}}">
+  {{end}}
+  {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
+</div>
+{{end}}
