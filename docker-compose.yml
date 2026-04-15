@@ -12,36 +12,3 @@ services:
 
 volumes:
   wan-ip-data:
-
-# ============================================================================
-# Advanced: Dual-network with Policy-Based Routing (PBR)
-# ============================================================================
-# If your setup requires separate network interfaces for IP checking vs
-# notification delivery (e.g., Discord routed through a different gateway),
-# uncomment and customize the section below.
-#
-# Most users do NOT need this — a single network with DISCORD_PROXY in .env
-# is sufficient.
-#
-#   wan-ip-check:
-#     cap_add:
-#       - NET_ADMIN     # required for PBR ip route/rule commands
-#     dns:
-#       - 192.168.x.x   # your DNS server(s)
-#     networks:
-#       net_primary:
-#         ipv4_address: 192.168.x.x
-#       net_secondary:
-#         ipv4_address: 192.168.x.x
-#
-# Then set in .env:
-#   NOTIFICATION_INTERFACE=eth1
-#   PBR_GATEWAY=192.168.x.1
-#   PBR_DEV=eth1
-#   PBR_TABLE=10
-#
-# networks:
-#   net_primary:
-#     external: true
-#   net_secondary:
-#     external: true
