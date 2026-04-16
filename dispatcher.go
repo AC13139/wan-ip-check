@@ -2,13 +2,86 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 )
+
+// PBRManager manages per-WAN-interface policy-based routing tables.
+// Uses deterministic table mapping so tables survive process restarts.
+type PBRManager struct {
+	mu     sync.Mutex
+	tables map[string]int
+	logger *slog.Logger
+}
+
+func NewPBRManager(logger *slog.Logger) *PBRManager {
+	return &PBRManager{tables: make(map[string]int), logger: logger}
+}
+
+// deterministicTable returns a stable table number (100-65535) for a given key.
+// Large range minimizes collision risk across different WAN interface configs.
+func deterministicTable(key string) int {
+	var hash uint32
+	for _, c := range key {
+		hash = hash*31 + uint32(c)
+	}
+	return 100 + int(hash%65435) // range 100-65535
+}
+
+// EnsureRoute sets up PBR routing for the given interface/source/gateway combination.
+func (m *PBRManager) EnsureRoute(interfaceName, sourceAddr, gateway string) (int, error) {
+	key := fmt.Sprintf("%s|%s|%s", interfaceName, sourceAddr, gateway)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if tbl, ok := m.tables[key]; ok {
+		return tbl, nil
+	}
+
+	tbl := deterministicTable(key)
+	tblStr := fmt.Sprintf("%d", tbl)
+
+	m.logger.Info("PBR: setting up route", "interface", interfaceName, "source", sourceAddr, "gateway", gateway, "table", tbl)
+
+	out, err := exec.Command("ip", "route", "replace", "default", "via", gateway, "dev", interfaceName, "table", tblStr).CombinedOutput()
+	if err != nil {
+		return 0, fmt.Errorf("ip route replace: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	out, err = exec.Command("ip", "rule", "add", "from", sourceAddr, "lookup", tblStr).CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "File exists") {
+		return 0, fmt.Errorf("ip rule add: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	m.tables[key] = tbl
+	return tbl, nil
+}
+
+// CleanupRoute removes PBR routing for a given tuple.
+func (m *PBRManager) CleanupRoute(interfaceName, sourceAddr, gateway string) {
+	key := fmt.Sprintf("%s|%s|%s", interfaceName, sourceAddr, gateway)
+	m.mu.Lock()
+	tbl, ok := m.tables[key]
+	if ok {
+		delete(m.tables, key)
+	}
+	m.mu.Unlock()
+
+	if !ok {
+		return
+	}
+	tblStr := fmt.Sprintf("%d", tbl)
+	exec.Command("ip", "rule", "del", "from", sourceAddr, "lookup", tblStr).Run()
+	exec.Command("ip", "route", "del", "default", "table", tblStr).Run()
+	m.logger.Info("PBR: cleaned up route", "source", sourceAddr, "gateway", gateway, "table", tbl)
+}
 
 // Dispatcher manages WAN interface check scheduling and action execution.
 type Dispatcher struct {
@@ -19,9 +92,10 @@ type Dispatcher struct {
 	proxyClient      *http.Client
 	logger           *slog.Logger
 	cron             *cron.Cron
-	entryMap         map[int64]cron.EntryID // WAN interface ID -> cron entry ID
-	wanInterfaceLocks map[int64]*sync.Mutex // per-WAN-interface execution lock
+	entryMap         map[int64]cron.EntryID
+	wanInterfaceLocks map[int64]*sync.Mutex
 	locksMu          sync.Mutex
+	pbrManager       *PBRManager
 }
 
 // NewDispatcher creates a new dispatcher.
@@ -35,6 +109,7 @@ func NewDispatcher(app *App) *Dispatcher {
 		logger:           app.logger,
 		entryMap:         make(map[int64]cron.EntryID),
 		wanInterfaceLocks: make(map[int64]*sync.Mutex),
+		pbrManager:       NewPBRManager(app.logger),
 	}
 }
 
@@ -134,6 +209,20 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 	}
 
 	logger := d.logger.With("wan_interface_id", wanInterfaceID, "wan_interface", wi.Name)
+
+	// Migrate old config and set up gateway PBR if needed
+	wi.Config.MigrateEgress()
+	if wi.Config.Egress.Mode == "gateway" {
+		if err := d.setupGatewayPBR(&wi.Config.Egress, logger); err != nil {
+			logger.Error("gateway PBR setup failed — skipping check to avoid wrong-path detection", "error", err)
+			state.LastStatus = "failed"
+			state.ConsecutiveFailures++
+			state.LastError = "PBR setup failed: " + err.Error()
+			state.LastCheckAt = time.Now()
+			d.db.UpdateWANInterfaceState(state)
+			return
+		}
+	}
 
 	// Detect current IP
 	newIP, err := DetectIP(ctx, wi.Config, d.directClient)
@@ -344,6 +433,24 @@ func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, curr
 			d.db.ClearRetryFlag(run.ID)
 		}
 	}
+}
+
+// setupGatewayPBR ensures PBR routing is configured for gateway mode.
+func (d *Dispatcher) setupGatewayPBR(egress *EgressConfig, logger *slog.Logger) error {
+	sourceAddr := egress.SourceAddress
+	if sourceAddr == "" && egress.InterfaceName != "" {
+		resolved, err := resolveSourceIP(egress.InterfaceName)
+		if err != nil {
+			return fmt.Errorf("resolving source IP: %w", err)
+		}
+		sourceAddr = resolved
+		egress.SourceAddress = sourceAddr // cache for DetectIP
+	}
+	if sourceAddr == "" || egress.Gateway == "" {
+		return fmt.Errorf("gateway mode requires interface + gateway, got source=%q gateway=%q", sourceAddr, egress.Gateway)
+	}
+	_, err := d.pbrManager.EnsureRoute(egress.InterfaceName, sourceAddr, egress.Gateway)
+	return err
 }
 
 func (d *Dispatcher) getWANInterfaceLock(wanInterfaceID int64) *sync.Mutex {

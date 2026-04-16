@@ -74,6 +74,7 @@ func loadTemplates() (*Templates, error) {
 		"history-rows":       "templates/history.html",
 		"config-fields":      "templates/partials/config_fields.html",
 		"wan-interface-card": "templates/partials/wan_interface_card.html",
+		"egress-fields":     "templates/partials/egress_fields.html",
 	}
 	for name, path := range partialFiles {
 		content, err := fs.ReadFile(templateFS, path)
@@ -279,6 +280,7 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 			http.Redirect(w, r, "/wan-interfaces", http.StatusSeeOther)
 			return
 		}
+		wi.Config.MigrateEgress()
 		data.WANInterface = wi
 		data.Title = "Edit WAN Interface: " + wi.Name
 
@@ -533,6 +535,28 @@ func (s *Server) handleUIDeleteAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) handleUIEgressFields(w http.ResponseWriter, r *http.Request) {
+	mode := r.URL.Query().Get("egress_mode")
+	if mode == "" {
+		mode = "default"
+	}
+	ifaces, _ := listNetworkInterfaces()
+	data := struct {
+		Mode          string
+		Interfaces    []NetworkInterface
+		InterfaceName string
+		Gateway       string
+		ProxyURL      string
+	}{
+		Mode:          mode,
+		Interfaces:    ifaces,
+		InterfaceName: r.URL.Query().Get("interface_name"),
+		Gateway:       r.URL.Query().Get("gateway"),
+		ProxyURL:      r.URL.Query().Get("proxy_url"),
+	}
+	s.templates.renderPartial(w, "egress-fields", data)
+}
+
 func (s *Server) handleUIActionSchema(w http.ResponseWriter, r *http.Request) {
 	actionType := r.URL.Query().Get("type")
 	if actionType == "" {
@@ -565,11 +589,10 @@ func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Reque
 		Schedule: r.FormValue("schedule"),
 		Timezone: r.FormValue("timezone"),
 		Config: WANInterfaceConfig{
-			ProbeURLs:     parseLines(r.FormValue("probe_urls")),
-			Strategy:      r.FormValue("strategy"),
-			BindInterface: r.FormValue("bind_interface"),
-			BindAddress:   r.FormValue("bind_address"),
-			TimeoutSecs:   parseInt(r.FormValue("timeout"), 10),
+			ProbeURLs:   parseLines(r.FormValue("probe_urls")),
+			Strategy:    r.FormValue("strategy"),
+			TimeoutSecs: parseInt(r.FormValue("timeout"), 10),
+			Egress:      parseEgressForm(r),
 		},
 	}
 	if wi.Name == "" {
@@ -608,11 +631,10 @@ func (s *Server) handleUIUpdateWANInterface(w http.ResponseWriter, r *http.Reque
 	existing.Schedule = r.FormValue("schedule")
 	existing.Timezone = r.FormValue("timezone")
 	existing.Config = WANInterfaceConfig{
-		ProbeURLs:     parseLines(r.FormValue("probe_urls")),
-		Strategy:      r.FormValue("strategy"),
-		BindInterface: r.FormValue("bind_interface"),
-		BindAddress:   r.FormValue("bind_address"),
-		TimeoutSecs:   parseInt(r.FormValue("timeout"), 10),
+		ProbeURLs:   parseLines(r.FormValue("probe_urls")),
+		Strategy:    r.FormValue("strategy"),
+		TimeoutSecs: parseInt(r.FormValue("timeout"), 10),
+		Egress:      parseEgressForm(r),
 	}
 
 	if err := validateCron(existing.Schedule); err != nil {
@@ -803,6 +825,19 @@ func parseHistoryFilter(r *http.Request) HistoryFilter {
 		}
 	}
 	return f
+}
+
+func parseEgressForm(r *http.Request) EgressConfig {
+	mode := r.FormValue("egress_mode")
+	if mode == "" {
+		mode = "default"
+	}
+	return EgressConfig{
+		Mode:          mode,
+		InterfaceName: r.FormValue("egress_interface"),
+		Gateway:       r.FormValue("egress_gateway"),
+		ProxyURL:      r.FormValue("egress_proxy_url"),
+	}
 }
 
 func parseLines(s string) []string {

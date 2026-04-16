@@ -67,21 +67,23 @@
   </div>
 
   <div class="card mb-lg">
-    <h3 class="section-title">Network (Optional)</h3>
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Bind Interface</label>
-        <input type="text" name="bind_interface" class="form-input mono"
-               value="{{if .IsEdit}}{{.WANInterface.Config.BindInterface}}{{end}}"
-               placeholder="e.g., eth0">
-        <div class="form-help">Network interface for egress routing</div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Bind Address</label>
-        <input type="text" name="bind_address" class="form-input mono"
-               value="{{if .IsEdit}}{{.WANInterface.Config.BindAddress}}{{end}}"
-               placeholder="e.g., 192.168.1.100">
-      </div>
+    <h3 class="section-title">Network / Egress</h3>
+    <div class="form-group">
+      <label class="form-label">Routing Method</label>
+      <select name="egress_mode" class="form-select"
+              hx-get="/ui/egress-fields"
+              hx-target="#egress-fields"
+              hx-swap="innerHTML"
+              hx-include="[name='egress_mode']">
+        <option value="default" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "default")}}selected{{end}}>Default route</option>
+        <option value="gateway" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "gateway")}}selected{{end}}>Specific gateway (requires NET_ADMIN)</option>
+        <option value="proxy" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "proxy")}}selected{{end}}>HTTP proxy</option>
+      </select>
+    </div>
+    <div id="egress-fields"
+         hx-get="/ui/egress-fields?egress_mode={{if .IsEdit}}{{.WANInterface.Config.Egress.Mode}}{{else}}default{{end}}&interface_name={{if .IsEdit}}{{.WANInterface.Config.Egress.InterfaceName}}{{end}}&gateway={{if .IsEdit}}{{.WANInterface.Config.Egress.Gateway}}{{end}}&proxy_url={{if .IsEdit}}{{.WANInterface.Config.Egress.ProxyURL}}{{end}}"
+         hx-trigger="load"
+         hx-swap="innerHTML">
     </div>
   </div>
 

@@ -90,6 +90,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/action-types", s.handleListActionTypes)
 	mux.HandleFunc("GET /api/wan-interfaces/{id}/actions", s.handleGetWANInterfaceActions)
 	mux.HandleFunc("PUT /api/wan-interfaces/{id}/actions", s.handleSetWANInterfaceActions)
+	mux.HandleFunc("GET /api/network/interfaces", s.handleNetworkInterfaces)
+	mux.HandleFunc("GET /api/network/capabilities", s.handleNetworkCapabilities)
 	mux.HandleFunc("GET /api/history", s.handleGlobalHistory)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
@@ -124,6 +126,7 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /ui/actions/{id}", s.handleUIDeleteAction)
 
 	// HTMX partials — data loading
+	mux.HandleFunc("GET /ui/egress-fields", s.handleUIEgressFields)
 	mux.HandleFunc("GET /ui/action-schema", s.handleUIActionSchema)
 	mux.HandleFunc("GET /ui/history-table", s.handleUIHistoryTable)
 }

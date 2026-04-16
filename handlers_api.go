@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"os/exec"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -69,6 +72,7 @@ func (s *Server) handleListWANInterfaces(w http.ResponseWriter, r *http.Request)
 
 	var result []wanInterfaceWithState
 	for _, wi := range wanInterfaces {
+		wi.Config.MigrateEgress()
 		wiws := wanInterfaceWithState{WANInterface: wi}
 		if state, err := s.app.db.GetWANInterfaceState(wi.ID); err == nil {
 			wiws.State = state
@@ -132,6 +136,7 @@ func (s *Server) handleGetWANInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wi.Config.MigrateEgress()
 	state, _ := s.app.db.GetWANInterfaceState(id)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"wan_interface": wi,
@@ -603,6 +608,82 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, settings)
+}
+
+// --- Network ---
+
+type NetworkInterface struct {
+	Name      string   `json:"name"`
+	Up        bool     `json:"up"`
+	Addresses []string `json:"addresses"`
+}
+
+func (s *Server) handleNetworkInterfaces(w http.ResponseWriter, r *http.Request) {
+	ifaces, err := listNetworkInterfaces()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list interfaces")
+		return
+	}
+	writeJSON(w, http.StatusOK, ifaces)
+}
+
+func (s *Server) handleNetworkCapabilities(w http.ResponseWriter, r *http.Request) {
+	ifaces, _ := listNetworkInterfaces()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"net_admin":  checkNetAdmin(),
+		"interfaces": ifaces,
+	})
+}
+
+func listNetworkInterfaces() ([]NetworkInterface, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	var result []NetworkInterface
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		var ipv4s []string
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+				ipv4s = append(ipv4s, ipNet.IP.String())
+			}
+		}
+		if len(ipv4s) == 0 {
+			continue
+		}
+		result = append(result, NetworkInterface{
+			Name:      iface.Name,
+			Up:        true,
+			Addresses: ipv4s,
+		})
+	}
+	return result, nil
+}
+
+// netAdminCapability is checked once at startup and cached.
+var (
+	netAdminOnce   sync.Once
+	netAdminCached bool
+)
+
+func checkNetAdmin() bool {
+	netAdminOnce.Do(func() {
+		addErr := exec.Command("ip", "rule", "add", "from", "127.255.255.254", "lookup", "199").Run()
+		if addErr != nil {
+			netAdminCached = false
+			return
+		}
+		exec.Command("ip", "rule", "del", "from", "127.255.255.254", "lookup", "199").Run()
+		netAdminCached = true
+	})
+	return netAdminCached
 }
 
 // --- Helpers ---
