@@ -11,20 +11,20 @@ import (
 	"time"
 )
 
-// WANInterface represents an IP detection source (input plugin).
-type WANInterface struct {
+// Source represents an IP detection source (input plugin).
+type Source struct {
 	ID        int64        `json:"id"`
 	Name      string       `json:"name"`
 	Enabled   bool         `json:"enabled"`
 	Schedule  string       `json:"schedule"`
 	Timezone  string       `json:"timezone"`
-	Config    WANInterfaceConfig `json:"config"`
+	Config    SourceConfig `json:"config"`
 	CreatedAt time.Time    `json:"created_at"`
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
-// WANInterfaceConfig holds the detection configuration for a source.
-type WANInterfaceConfig struct {
+// SourceConfig holds the detection configuration for a source.
+type SourceConfig struct {
 	ProbeURLs    []string `json:"probe_urls"`
 	Strategy     string   `json:"strategy"`      // "fallback" or "single"
 	BindInterface string  `json:"bind_interface"` // optional: network interface for egress
@@ -32,9 +32,9 @@ type WANInterfaceConfig struct {
 	TimeoutSecs  int      `json:"timeout_seconds"`
 }
 
-// WANInterfaceState holds the runtime state for a source.
-type WANInterfaceState struct {
-	WANInterfaceID            int64     `json:"source_id"`
+// SourceState holds the runtime state for a source.
+type SourceState struct {
+	SourceID            int64     `json:"source_id"`
 	LastObservedIP      string    `json:"last_observed_ip"`
 	LastCheckAt         time.Time `json:"last_check_at"`
 	LastSuccessAt       time.Time `json:"last_success_at"`
@@ -45,9 +45,9 @@ type WANInterfaceState struct {
 	LastError           string    `json:"last_error"`
 }
 
-// DefaultWANInterfaceConfig returns sensible defaults for a new source.
-func DefaultWANInterfaceConfig() WANInterfaceConfig {
-	return WANInterfaceConfig{
+// DefaultSourceConfig returns sensible defaults for a new source.
+func DefaultSourceConfig() SourceConfig {
+	return SourceConfig{
 		ProbeURLs: []string{
 			"https://api.ipify.org",
 			"https://checkip.amazonaws.com",
@@ -66,7 +66,7 @@ var (
 
 // DetectIP probes the configured URLs to determine the current public IP.
 // Uses the fallback strategy: try each URL in order, return first valid result.
-func DetectIP(ctx context.Context, cfg WANInterfaceConfig, baseClient *http.Client) (string, error) {
+func DetectIP(ctx context.Context, cfg SourceConfig, baseClient *http.Client) (string, error) {
 	if len(cfg.ProbeURLs) == 0 {
 		return "", fmt.Errorf("no probe URLs configured")
 	}
@@ -130,7 +130,7 @@ func probeIP(ctx context.Context, client *http.Client, url string, timeout time.
 }
 
 // getBoundClient returns a cached HTTP client bound to a specific interface/address.
-func getBoundClient(cfg WANInterfaceConfig, timeout time.Duration) *http.Client {
+func getBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
 	key := fmt.Sprintf("%s|%s|%s", cfg.BindInterface, cfg.BindAddress, timeout)
 	boundClientsMu.Lock()
 	defer boundClientsMu.Unlock()
@@ -144,7 +144,7 @@ func getBoundClient(cfg WANInterfaceConfig, timeout time.Duration) *http.Client 
 }
 
 // buildBoundClient creates an HTTP client that binds to a specific interface or address.
-func buildBoundClient(cfg WANInterfaceConfig, timeout time.Duration) *http.Client {
+func buildBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: timeout}
 
 	if cfg.BindAddress != "" {

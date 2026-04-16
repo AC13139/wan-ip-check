@@ -15,7 +15,7 @@ import (
 // --- Status ---
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
-	sources, err := s.app.db.ListWANInterfaces()
+	sources, err := s.app.db.ListSources()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list sources")
 		return
@@ -32,7 +32,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	var statuses []sourceStatus
 	for _, src := range sources {
-		state, err := s.app.db.GetWANInterfaceState(src.ID)
+		state, err := s.app.db.GetSourceState(src.ID)
 		ss := sourceStatus{ID: src.ID, Name: src.Name, Enabled: src.Enabled}
 		if err == nil {
 			ss.IP = state.LastObservedIP
@@ -48,29 +48,29 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"app":     "wan-ip-check",
 		"version": "2.0.0-alpha",
-		"wan_interfaces": statuses,
+		"sources": statuses,
 		"action_count": len(actions),
 	})
 }
 
 // --- Sources ---
 
-func (s *Server) handleListWANInterfaces(w http.ResponseWriter, r *http.Request) {
-	sources, err := s.app.db.ListWANInterfaces()
+func (s *Server) handleListSources(w http.ResponseWriter, r *http.Request) {
+	sources, err := s.app.db.ListSources()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list sources")
 		return
 	}
 
 	type sourceWithState struct {
-		WANInterface
-		State *WANInterfaceState `json:"state,omitempty"`
+		Source
+		State *SourceState `json:"state,omitempty"`
 	}
 
 	var result []sourceWithState
 	for _, src := range sources {
-		sws := sourceWithState{WANInterface: src}
-		if state, err := s.app.db.GetWANInterfaceState(src.ID); err == nil {
+		sws := sourceWithState{Source: src}
+		if state, err := s.app.db.GetSourceState(src.ID); err == nil {
 			sws.State = state
 		}
 		result = append(result, sws)
@@ -78,8 +78,8 @@ func (s *Server) handleListWANInterfaces(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) handleCreateWANInterface(w http.ResponseWriter, r *http.Request) {
-	var src WANInterface
+func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
+	var src Source
 	if err := decodeJSON(r, &src); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -101,11 +101,11 @@ func (s *Server) handleCreateWANInterface(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if len(src.Config.ProbeURLs) == 0 {
-		src.Config = DefaultWANInterfaceConfig()
+		src.Config = DefaultSourceConfig()
 	}
 	src.Enabled = true
 
-	id, err := s.app.db.CreateWANInterface(&src)
+	id, err := s.app.db.CreateSource(&src)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create source")
 		return
@@ -115,16 +115,16 @@ func (s *Server) handleCreateWANInterface(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, src)
 }
 
-func (s *Server) handleGetWANInterface(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
 		return
 	}
 
-	src, err := s.app.db.GetWANInterface(id)
+	src, err := s.app.db.GetSource(id)
 	if err == sql.ErrNoRows {
-		writeError(w, http.StatusNotFound, "WAN interface not found")
+		writeError(w, http.StatusNotFound, "source not found")
 		return
 	}
 	if err != nil {
@@ -132,23 +132,23 @@ func (s *Server) handleGetWANInterface(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, _ := s.app.db.GetWANInterfaceState(id)
+	state, _ := s.app.db.GetSourceState(id)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"wan_interface": src,
+		"source": src,
 		"state":  state,
 	})
 }
 
-func (s *Server) handleUpdateWANInterface(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUpdateSource(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
 		return
 	}
 
-	existing, err := s.app.db.GetWANInterface(id)
+	existing, err := s.app.db.GetSource(id)
 	if err == sql.ErrNoRows {
-		writeError(w, http.StatusNotFound, "WAN interface not found")
+		writeError(w, http.StatusNotFound, "source not found")
 		return
 	}
 	if err != nil {
@@ -156,7 +156,7 @@ func (s *Server) handleUpdateWANInterface(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var update WANInterface
+	var update Source
 	if err := decodeJSON(r, &update); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -185,7 +185,7 @@ func (s *Server) handleUpdateWANInterface(w http.ResponseWriter, r *http.Request
 	}
 	existing.Enabled = update.Enabled
 
-	if err := s.app.db.UpdateWANInterface(existing); err != nil {
+	if err := s.app.db.UpdateSource(existing); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update source")
 		return
 	}
@@ -193,13 +193,13 @@ func (s *Server) handleUpdateWANInterface(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, existing)
 }
 
-func (s *Server) handleDeleteWANInterface(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDeleteSource(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
 		return
 	}
-	if err := s.app.db.DeleteWANInterface(id); err != nil {
+	if err := s.app.db.DeleteSource(id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete source")
 		return
 	}
@@ -215,20 +215,20 @@ func (s *Server) handleManualCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify source exists
-	if _, err := s.app.db.GetWANInterface(id); err == sql.ErrNoRows {
-		writeError(w, http.StatusNotFound, "WAN interface not found")
+	if _, err := s.app.db.GetSource(id); err == sql.ErrNoRows {
+		writeError(w, http.StatusNotFound, "source not found")
 		return
 	}
 
 	// Run check synchronously
-	s.dispatcher.checkWANInterface(r.Context(), id)
+	s.dispatcher.checkSource(r.Context(), id)
 
 	// Return updated state
-	state, _ := s.app.db.GetWANInterfaceState(id)
+	state, _ := s.app.db.GetSourceState(id)
 	writeJSON(w, http.StatusOK, state)
 }
 
-func (s *Server) handleWANInterfaceHistory(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSourceHistory(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
@@ -423,7 +423,7 @@ func (s *Server) handleTestAction(w http.ResponseWriter, r *http.Request) {
 	// For Discord/Webhook: send a test notification.
 	testIP := "203.0.113.1" // RFC 5737 TEST-NET-3, safe for test messages
 	event := IPEvent{
-		WANInterfaceName: "Test",
+		SourceName: "Test",
 		EventType:  "ip_changed",
 		OldIP:      "203.0.113.0",
 		NewIP:      testIP,
@@ -482,9 +482,9 @@ func (s *Server) handleListActionTypes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, types)
 }
 
-// --- WANInterface-Action linking ---
+// --- Source-Action linking ---
 
-func (s *Server) handleGetWANInterfaceActions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetSourceActions(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
@@ -502,14 +502,14 @@ func (s *Server) handleGetWANInterfaceActions(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, links)
 }
 
-func (s *Server) handleSetWANInterfaceActions(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSetSourceActions(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid source ID")
 		return
 	}
 
-	var links []WANInterfaceAction
+	var links []SourceAction
 	if err := decodeJSON(r, &links); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -524,7 +524,7 @@ func (s *Server) handleSetWANInterfaceActions(w http.ResponseWriter, r *http.Req
 
 	// Add new links
 	for i := range links {
-		links[i].WANInterfaceID = id
+		links[i].SourceID = id
 		if links[i].TriggerOn == "" {
 			links[i].TriggerOn = "ip_changed"
 		}

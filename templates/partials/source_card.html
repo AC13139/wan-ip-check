@@ -1,12 +1,12 @@
-<div class="card" id="wan-interface-card-{{.WANInterface.ID}}">
+<div class="card" id="source-card-{{.Source.ID}}">
   <div class="card-header">
     <div class="flex-center gap-sm">
       <span class="status-dot {{.StatusClass}} pulse"></span>
-      <span class="card-title">{{.WANInterface.Name}}</span>
+      <span class="card-title">{{.Source.Name}}</span>
     </div>
     <button class="btn btn-sm btn-secondary"
-            hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}/check"
-            hx-target="#wan-interface-card-{{.WANInterface.ID}}"
+            hx-post="/ui/sources/{{.Source.ID}}/check"
+            hx-target="#source-card-{{.Source.ID}}"
             hx-swap="outerHTML">Check Now</button>
   </div>
   <div class="card-body">
@@ -24,7 +24,7 @@
       <span class="badge {{.StatusBadgeClass}}">{{.StatusText}}</span>
     </div>
     <div class="flex-center gap-sm text-sm text-muted">
-      <span class="mono-sm">{{.WANInterface.Schedule}}</span>
+      <span class="mono-sm">{{.Source.Schedule}}</span>
       <span>{{.ActionCount}} actions</span>
     </div>
   </div>

@@ -62,7 +62,7 @@ func (c *BootConfig) PBREnabled() bool {
 // MigrateEnvToDB seeds the database from legacy env vars on first run.
 // Only runs if the database has no sources configured.
 func MigrateEnvToDB(db *DB, encKey []byte, logger *slog.Logger) error {
-	sources, err := db.ListWANInterfaces()
+	sources, err := db.ListSources()
 	if err != nil {
 		return fmt.Errorf("listing sources: %w", err)
 	}
@@ -77,7 +77,7 @@ func MigrateEnvToDB(db *DB, encKey []byte, logger *slog.Logger) error {
 	seedSettings(db, logger)
 
 	// Create default source from env vars
-	sourceID, err := seedDefaultWANInterface(db, logger)
+	sourceID, err := seedDefaultSource(db, logger)
 	if err != nil {
 		return err
 	}
@@ -105,18 +105,18 @@ func seedSettings(db *DB, logger *slog.Logger) {
 	}
 }
 
-func seedDefaultWANInterface(db *DB, logger *slog.Logger) (int64, error) {
+func seedDefaultSource(db *DB, logger *slog.Logger) (int64, error) {
 	ipService := envOrDefault("IP_CHECK_SERVICE", "https://icanhazip.com")
 	schedule := envOrDefault("CRON_SCHEDULE", "*/5 * * * *")
 	timezone := envOrDefault("TIMEZONE", "Local")
 
-	cfg := DefaultWANInterfaceConfig()
+	cfg := DefaultSourceConfig()
 	// If legacy env var specified a custom IP service, prepend it to probe list
 	if ipService != "https://icanhazip.com" {
 		cfg.ProbeURLs = append([]string{ipService}, cfg.ProbeURLs...)
 	}
 
-	source := &WANInterface{
+	source := &Source{
 		Name:     "Default",
 		Enabled:  true,
 		Schedule: schedule,
@@ -124,7 +124,7 @@ func seedDefaultWANInterface(db *DB, logger *slog.Logger) (int64, error) {
 		Config:   cfg,
 	}
 
-	id, err := db.CreateWANInterface(source)
+	id, err := db.CreateSource(source)
 	if err != nil {
 		return 0, fmt.Errorf("creating default source: %w", err)
 	}
@@ -154,7 +154,7 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 		if err != nil {
 			logger.Warn("failed to create Discord action", "error", err)
 		} else {
-			db.LinkAction(&WANInterfaceAction{WANInterfaceID: sourceID, ActionID: actionID, TriggerOn: "both", Enabled: true})
+			db.LinkAction(&SourceAction{SourceID: sourceID, ActionID: actionID, TriggerOn: "both", Enabled: true})
 			logger.Info("created Discord action", "id", actionID)
 		}
 	}
@@ -191,7 +191,7 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 		if err != nil {
 			logger.Warn("failed to create CF DNS action", "error", err)
 		} else {
-			db.LinkAction(&WANInterfaceAction{WANInterfaceID: sourceID, ActionID: actionID, TriggerOn: "ip_changed", Enabled: true})
+			db.LinkAction(&SourceAction{SourceID: sourceID, ActionID: actionID, TriggerOn: "ip_changed", Enabled: true})
 			logger.Info("created Cloudflare DNS action", "id", actionID)
 		}
 	}
@@ -218,7 +218,7 @@ func seedActions(db *DB, sourceID int64, encKey []byte, logger *slog.Logger) {
 		if err != nil {
 			logger.Warn("failed to create CF Gateway action", "error", err)
 		} else {
-			db.LinkAction(&WANInterfaceAction{WANInterfaceID: sourceID, ActionID: actionID, TriggerOn: "ip_changed", Enabled: true})
+			db.LinkAction(&SourceAction{SourceID: sourceID, ActionID: actionID, TriggerOn: "ip_changed", Enabled: true})
 			logger.Info("created Cloudflare Gateway action", "id", actionID)
 		}
 	}

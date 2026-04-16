@@ -124,7 +124,7 @@ type embedFooter struct {
 
 func buildChangePayload(event IPEvent) discordPayload {
 	fields := []embedField{
-		{Name: "WANInterface", Value: event.WANInterfaceName, Inline: true},
+		{Name: "Source", Value: event.SourceName, Inline: true},
 		{Name: "Old IP", Value: event.OldIP, Inline: true},
 		{Name: "New IP", Value: "**" + event.NewIP + "**", Inline: true},
 	}
@@ -148,7 +148,7 @@ func buildSummaryPayload(event IPEvent) discordPayload {
 		AvatarURL: avatarURL,
 		Embeds: []discordEmbed{{
 			Title:       ":white_check_mark: Daily IP Summary: No Change",
-			Description: fmt.Sprintf("WANInterface **%s**: IP address remains **%s**.", event.WANInterfaceName, event.NewIP),
+			Description: fmt.Sprintf("Source **%s**: IP address remains **%s**.", event.SourceName, event.NewIP),
 			Color:       colorGreen,
 			Fields: []embedField{
 				{Name: "Current IP", Value: "**" + event.NewIP + "**", Inline: false},

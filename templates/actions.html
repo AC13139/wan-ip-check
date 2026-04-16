@@ -26,12 +26,12 @@
       </label>
     </div>
     <div class="card-body">
-      {{if .LinkedWANInterfaces}}
+      {{if .LinkedSources}}
       <div class="text-sm text-secondary mb-sm">
-        Linked from: {{range $i, $s := .LinkedWANInterfaces}}{{if $i}}, {{end}}{{$s}}{{end}}
+        Linked from: {{range $i, $s := .LinkedSources}}{{if $i}}, {{end}}{{$s}}{{end}}
       </div>
       {{else}}
-      <div class="text-sm text-muted mb-sm">Not linked to any WAN interface</div>
+      <div class="text-sm text-muted mb-sm">Not linked to any source</div>
       {{end}}
     </div>
     <div class="card-footer">
