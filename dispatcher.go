@@ -10,44 +10,44 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Dispatcher manages source check scheduling and action execution.
+// Dispatcher manages WAN interface check scheduling and action execution.
 type Dispatcher struct {
-	db           *DB
-	registry     *ActionRegistry
-	encKey       []byte
-	directClient *http.Client
-	proxyClient  *http.Client
-	logger       *slog.Logger
-	cron         *cron.Cron
-	entryMap     map[int64]cron.EntryID // source ID → cron entry ID
-	sourceLocks  map[int64]*sync.Mutex  // per-source execution lock
-	locksMu      sync.Mutex
+	db               *DB
+	registry         *ActionRegistry
+	encKey           []byte
+	directClient     *http.Client
+	proxyClient      *http.Client
+	logger           *slog.Logger
+	cron             *cron.Cron
+	entryMap         map[int64]cron.EntryID // WAN interface ID -> cron entry ID
+	wanInterfaceLocks map[int64]*sync.Mutex // per-WAN-interface execution lock
+	locksMu          sync.Mutex
 }
 
 // NewDispatcher creates a new dispatcher.
 func NewDispatcher(app *App) *Dispatcher {
 	return &Dispatcher{
-		db:           app.db,
-		registry:     app.registry,
-		encKey:       app.encKey,
-		directClient: app.directClient,
-		proxyClient:  app.proxyClient,
-		logger:       app.logger,
-		entryMap:     make(map[int64]cron.EntryID),
-		sourceLocks:  make(map[int64]*sync.Mutex),
+		db:               app.db,
+		registry:         app.registry,
+		encKey:           app.encKey,
+		directClient:     app.directClient,
+		proxyClient:      app.proxyClient,
+		logger:           app.logger,
+		entryMap:         make(map[int64]cron.EntryID),
+		wanInterfaceLocks: make(map[int64]*sync.Mutex),
 	}
 }
 
-// Start loads all enabled sources, runs them once, and starts the cron scheduler.
+// Start loads all enabled WAN interfaces, runs them once, and starts the cron scheduler.
 func (d *Dispatcher) Start(ctx context.Context) error {
-	// Run all sources once synchronously before starting cron.
-	sources, err := d.db.ListSources()
+	// Run all WAN interfaces once synchronously before starting cron.
+	wanInterfaces, err := d.db.ListWANInterfaces()
 	if err != nil {
 		return err
 	}
-	for _, src := range sources {
-		if src.Enabled {
-			d.checkSource(ctx, src.ID)
+	for _, wi := range wanInterfaces {
+		if wi.Enabled {
+			d.checkWANInterface(ctx, wi.ID)
 		}
 	}
 
@@ -61,8 +61,8 @@ func (d *Dispatcher) Stop() {
 	}
 }
 
-// Reload stops the current cron, re-reads sources from DB, and reschedules.
-// Called by API handlers after source create/update/delete.
+// Reload stops the current cron, re-reads WAN interfaces from DB, and reschedules.
+// Called by API handlers after WAN interface create/update/delete.
 func (d *Dispatcher) Reload(ctx context.Context) error {
 	d.logger.Info("reloading dispatcher")
 	if d.cron != nil {
@@ -77,66 +77,66 @@ func (d *Dispatcher) startCron(ctx context.Context) error {
 		cron.WithChain(cron.SkipIfStillRunning(cron.DefaultLogger)),
 	)
 
-	sources, err := d.db.ListSources()
+	wanInterfaces, err := d.db.ListWANInterfaces()
 	if err != nil {
 		return err
 	}
 
-	for _, src := range sources {
-		if !src.Enabled {
+	for _, wi := range wanInterfaces {
+		if !wi.Enabled {
 			continue
 		}
-		s := src
+		w := wi
 
-		// Apply per-source timezone to cron
+		// Apply per-WAN-interface timezone to cron
 		loc := time.Now().Location()
-		if s.Timezone != "" && s.Timezone != "Local" {
-			if parsed, err := time.LoadLocation(s.Timezone); err == nil {
+		if w.Timezone != "" && w.Timezone != "Local" {
+			if parsed, err := time.LoadLocation(w.Timezone); err == nil {
 				loc = parsed
 			}
 		}
 
 		// Wrap schedule with timezone
-		schedule := s.Schedule
+		schedule := w.Schedule
 		entryID, err := d.cron.AddFunc("CRON_TZ="+loc.String()+" "+schedule, func() {
-			d.checkSource(ctx, s.ID)
+			d.checkWANInterface(ctx, w.ID)
 		})
 		if err != nil {
-			d.logger.Error("invalid schedule for source", "source_id", s.ID, "name", s.Name, "schedule", s.Schedule, "error", err)
+			d.logger.Error("invalid schedule for WAN interface", "wan_interface_id", w.ID, "name", w.Name, "schedule", w.Schedule, "error", err)
 			continue
 		}
-		d.entryMap[s.ID] = entryID
-		d.logger.Info("scheduled source", "source_id", s.ID, "name", s.Name, "schedule", s.Schedule, "timezone", loc)
+		d.entryMap[w.ID] = entryID
+		d.logger.Info("scheduled WAN interface", "wan_interface_id", w.ID, "name", w.Name, "schedule", w.Schedule, "timezone", loc)
 	}
 
 	d.cron.Start()
-	d.logger.Info("dispatcher started", "sources", len(d.entryMap))
+	d.logger.Info("dispatcher started", "wan_interfaces", len(d.entryMap))
 	return nil
 }
 
-// checkSource runs the IP detection + action dispatch cycle for a single source.
-// Per-source mutex prevents concurrent execution from cron + manual API calls.
-func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
-	mu := d.getSourceLock(sourceID)
+// checkWANInterface runs the IP detection + action dispatch cycle for a single WAN interface.
+// Per-WAN-interface mutex prevents concurrent execution from cron + manual API calls.
+func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64) {
+	mu := d.getWANInterfaceLock(wanInterfaceID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	source, err := d.db.GetSource(sourceID)
+	wi, err := d.db.GetWANInterface(wanInterfaceID)
 	if err != nil {
-		d.logger.Error("failed to load source", "source_id", sourceID, "error", err)
+		d.logger.Error("failed to load WAN interface", "wan_interface_id", wanInterfaceID, "error", err)
 		return
 	}
 
-	state, err := d.db.GetSourceState(sourceID)
+	state, err := d.db.GetWANInterfaceState(wanInterfaceID)
 	if err != nil {
-		d.logger.Error("failed to load source state", "source_id", sourceID, "error", err)
+		d.logger.Error("failed to load WAN interface state", "wan_interface_id", wanInterfaceID, "error", err)
 		return
 	}
 
-	logger := d.logger.With("source_id", sourceID, "source", source.Name)
+	logger := d.logger.With("wan_interface_id", wanInterfaceID, "wan_interface", wi.Name)
 
 	// Detect current IP
-	newIP, err := DetectIP(ctx, source.Config, d.directClient)
+	newIP, err := DetectIP(ctx, wi.Config, d.directClient)
 	now := time.Now()
 
 	// Update check timestamp regardless of outcome
@@ -146,8 +146,8 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		state.LastStatus = "failed"
 		state.ConsecutiveFailures++
 		state.LastError = err.Error()
-		if err := d.db.UpdateSourceState(state); err != nil {
-			logger.Error("failed to persist source state", "error", err)
+		if err := d.db.UpdateWANInterfaceState(state); err != nil {
+			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Error("IP detection failed", "error", err, "consecutive_failures", state.ConsecutiveFailures)
 		return
@@ -165,44 +165,44 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 		state.LastObservedIP = newIP
 		state.LastStatus = "ok"
 		state.LastSummaryDate = now.Format("2006-01-02")
-		if err := d.db.UpdateSourceState(state); err != nil {
-			logger.Error("failed to persist source state", "error", err)
+		if err := d.db.UpdateWANInterfaceState(state); err != nil {
+			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Info("first run, IP saved", "ip", newIP)
 		return
 	}
 
-	// Retry any previously failed actions for this source
-	d.retryFailed(ctx, sourceID, state.LastObservedIP, logger)
+	// Retry any previously failed actions for this WAN interface
+	d.retryFailed(ctx, wanInterfaceID, state.LastObservedIP, logger)
 
 	if newIP != oldIP {
 		// IP changed
 		state.LastObservedIP = newIP
 		state.LastStatus = "changed"
 		state.LastSummaryDate = now.Format("2006-01-02") // suppress same-day summary
-		if err := d.db.UpdateSourceState(state); err != nil {
-			logger.Error("failed to persist source state", "error", err)
+		if err := d.db.UpdateWANInterfaceState(state); err != nil {
+			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Info("IP changed", "old", oldIP, "new", newIP)
 
 		event := IPEvent{
-			SourceID:   sourceID,
-			SourceName: source.Name,
-			EventType:  "ip_changed",
-			OldIP:      oldIP,
-			NewIP:      newIP,
-			Timestamp:  now.UTC().Format(time.RFC3339),
+			WANInterfaceID:   wanInterfaceID,
+			WANInterfaceName: wi.Name,
+			EventType:        "ip_changed",
+			OldIP:            oldIP,
+			NewIP:            newIP,
+			Timestamp:        now.UTC().Format(time.RFC3339),
 		}
 		d.executeActions(ctx, event, logger)
 	} else {
 		// IP unchanged
 		state.LastStatus = "ok"
-		if err := d.db.UpdateSourceState(state); err != nil {
-			logger.Error("failed to persist source state", "error", err)
+		if err := d.db.UpdateWANInterfaceState(state); err != nil {
+			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Debug("IP unchanged", "ip", newIP)
 
-		d.checkDailySummary(ctx, source, state, newIP, logger)
+		d.checkDailySummary(ctx, wi, state, newIP, logger)
 	}
 
 	// Prune old action_runs to prevent unbounded growth (keep last 10000)
@@ -212,9 +212,9 @@ func (d *Dispatcher) checkSource(ctx context.Context, sourceID int64) {
 }
 
 // checkDailySummary sends the daily "no change" notification if conditions are met.
-func (d *Dispatcher) checkDailySummary(ctx context.Context, source *Source, state *SourceState, currentIP string, logger *slog.Logger) {
+func (d *Dispatcher) checkDailySummary(ctx context.Context, wi *WANInterface, state *WANInterfaceState, currentIP string, logger *slog.Logger) {
 	// Load timezone
-	tz := source.Timezone
+	tz := wi.Timezone
 	if tz == "" {
 		tz = "Local"
 	}
@@ -246,25 +246,25 @@ func (d *Dispatcher) checkDailySummary(ctx context.Context, source *Source, stat
 	logger.Info("sending daily summary", "time", currentHHMM, "threshold", summaryTime)
 
 	event := IPEvent{
-		SourceID:   source.ID,
-		SourceName: source.Name,
-		EventType:  "ip_unchanged_daily",
-		OldIP:      currentIP,
-		NewIP:      currentIP,
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		WANInterfaceID:   wi.ID,
+		WANInterfaceName: wi.Name,
+		EventType:        "ip_unchanged_daily",
+		OldIP:            currentIP,
+		NewIP:            currentIP,
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
 	}
 	d.executeActions(ctx, event, logger)
 
 	// Update summary date
 	state.LastSummaryDate = today
-	if err := d.db.UpdateSourceState(state); err != nil {
+	if err := d.db.UpdateWANInterfaceState(state); err != nil {
 		logger.Error("failed to persist summary date", "error", err)
 	}
 }
 
-// executeActions runs all linked actions for a source event, sequentially.
+// executeActions runs all linked actions for a WAN interface event, sequentially.
 func (d *Dispatcher) executeActions(ctx context.Context, event IPEvent, logger *slog.Logger) {
-	linkedActions, err := d.db.GetLinkedActions(event.SourceID, event.EventType)
+	linkedActions, err := d.db.GetLinkedActions(event.WANInterfaceID, event.EventType)
 	if err != nil {
 		logger.Error("failed to get linked actions", "error", err)
 		return
@@ -275,38 +275,38 @@ func (d *Dispatcher) executeActions(ctx context.Context, event IPEvent, logger *
 		return
 	}
 
-	for _, sa := range linkedActions {
-		actionLogger := logger.With("action_id", sa.ActionID, "action", sa.ActionName, "type", sa.ActionType)
+	for _, wia := range linkedActions {
+		actionLogger := logger.With("action_id", wia.ActionID, "action", wia.ActionName, "type", wia.ActionType)
 
-		executor, err := d.registry.Get(sa.ActionType)
+		executor, err := d.registry.Get(wia.ActionType)
 		if err != nil {
 			actionLogger.Error("no executor registered", "error", err)
-			d.logRun(event, sa, "failed", "no executor for type: "+sa.ActionType)
+			d.logRun(event, wia, "failed", "no executor for type: "+wia.ActionType)
 			continue
 		}
 
 		// Decrypt secrets in config before execution
-		decryptedConfig, err := DecryptActionSecrets(sa.ActionConfigJSON, executor.SecretFields(), d.encKey)
+		decryptedConfig, err := DecryptActionSecrets(wia.ActionConfigJSON, executor.SecretFields(), d.encKey)
 		if err != nil {
 			actionLogger.Error("failed to decrypt config", "error", err)
-			d.logRun(event, sa, "failed", "decrypt error: "+err.Error())
+			d.logRun(event, wia, "failed", "decrypt error: "+err.Error())
 			continue
 		}
 
 		actionLogger.Info("executing action")
 		if err := executor.Execute(ctx, event, decryptedConfig); err != nil {
 			actionLogger.Error("action failed", "error", err)
-			d.logRun(event, sa, "failed", err.Error())
+			d.logRun(event, wia, "failed", err.Error())
 		} else {
 			actionLogger.Info("action succeeded")
-			d.logRun(event, sa, "success", "")
+			d.logRun(event, wia, "success", "")
 		}
 	}
 }
 
-// retryFailed re-executes actions that failed on the previous check for this source.
-func (d *Dispatcher) retryFailed(ctx context.Context, sourceID int64, currentIP string, logger *slog.Logger) {
-	failedRuns, err := d.db.GetFailedRuns(sourceID)
+// retryFailed re-executes actions that failed on the previous check for this WAN interface.
+func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, currentIP string, logger *slog.Logger) {
+	failedRuns, err := d.db.GetFailedRuns(wanInterfaceID)
 	if err != nil || len(failedRuns) == 0 {
 		return
 	}
@@ -329,12 +329,12 @@ func (d *Dispatcher) retryFailed(ctx context.Context, sourceID int64, currentIP 
 		}
 
 		event := IPEvent{
-			SourceID:   sourceID,
-			SourceName: "retry",
-			EventType:  run.EventType,
-			OldIP:      run.OldIP,
-			NewIP:      run.NewIP,
-			Timestamp:  time.Now().UTC().Format(time.RFC3339),
+			WANInterfaceID:   wanInterfaceID,
+			WANInterfaceName: "retry",
+			EventType:        run.EventType,
+			OldIP:            run.OldIP,
+			NewIP:            run.NewIP,
+			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 		}
 
 		if err := executor.Execute(ctx, event, decryptedConfig); err != nil {
@@ -346,27 +346,27 @@ func (d *Dispatcher) retryFailed(ctx context.Context, sourceID int64, currentIP 
 	}
 }
 
-func (d *Dispatcher) getSourceLock(sourceID int64) *sync.Mutex {
+func (d *Dispatcher) getWANInterfaceLock(wanInterfaceID int64) *sync.Mutex {
 	d.locksMu.Lock()
 	defer d.locksMu.Unlock()
-	if mu, ok := d.sourceLocks[sourceID]; ok {
+	if mu, ok := d.wanInterfaceLocks[wanInterfaceID]; ok {
 		return mu
 	}
 	mu := &sync.Mutex{}
-	d.sourceLocks[sourceID] = mu
+	d.wanInterfaceLocks[wanInterfaceID] = mu
 	return mu
 }
 
-func (d *Dispatcher) logRun(event IPEvent, sa SourceAction, status, errMsg string) {
+func (d *Dispatcher) logRun(event IPEvent, wia WANInterfaceAction, status, errMsg string) {
 	run := &ActionRun{
-		SourceID:   event.SourceID,
-		ActionID:   sa.ActionID,
-		EventType:  event.EventType,
-		OldIP:      event.OldIP,
-		NewIP:      event.NewIP,
-		Status:     status,
-		NeedsRetry: status == "failed",
-		ErrorMsg:   errMsg,
+		WANInterfaceID: event.WANInterfaceID,
+		ActionID:       wia.ActionID,
+		EventType:      event.EventType,
+		OldIP:          event.OldIP,
+		NewIP:          event.NewIP,
+		Status:         status,
+		NeedsRetry:     status == "failed",
+		ErrorMsg:       errMsg,
 	}
 	if err := d.db.LogActionRun(run); err != nil {
 		d.logger.Error("failed to log action run", "error", err)

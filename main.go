@@ -93,12 +93,12 @@ func main() {
 	}
 
 	// Log startup info
-	sources, _ := db.ListSources()
+	wanInterfaces, _ := db.ListWANInterfaces()
 	actions, _ := db.ListActions()
 	logger.Info("starting wan-ip-check v2",
 		"port", boot.Port,
 		"data_dir", boot.DataDir,
-		"sources", len(sources),
+		"wan_interfaces", len(wanInterfaces),
 		"actions", len(actions),
 		"pbr", boot.PBREnabled(),
 	)
@@ -114,7 +114,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Start dispatcher (source check scheduling + action execution)
+	// Start dispatcher (WAN interface check scheduling + action execution)
 	dispatcher := NewDispatcher(app)
 	if err := dispatcher.Start(ctx); err != nil {
 		logger.Error("failed to start dispatcher", "error", err)

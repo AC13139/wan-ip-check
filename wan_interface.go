@@ -11,30 +11,30 @@ import (
 	"time"
 )
 
-// Source represents an IP detection source (input plugin).
-type Source struct {
-	ID        int64        `json:"id"`
-	Name      string       `json:"name"`
-	Enabled   bool         `json:"enabled"`
-	Schedule  string       `json:"schedule"`
-	Timezone  string       `json:"timezone"`
-	Config    SourceConfig `json:"config"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+// WANInterface represents an IP detection WAN interface (input plugin).
+type WANInterface struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	Schedule  string             `json:"schedule"`
+	Timezone  string             `json:"timezone"`
+	Config    WANInterfaceConfig `json:"config"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
-// SourceConfig holds the detection configuration for a source.
-type SourceConfig struct {
-	ProbeURLs    []string `json:"probe_urls"`
-	Strategy     string   `json:"strategy"`      // "fallback" or "single"
-	BindInterface string  `json:"bind_interface"` // optional: network interface for egress
-	BindAddress  string   `json:"bind_address"`   // optional: source IP for egress
-	TimeoutSecs  int      `json:"timeout_seconds"`
+// WANInterfaceConfig holds the detection configuration for a WAN interface.
+type WANInterfaceConfig struct {
+	ProbeURLs     []string `json:"probe_urls"`
+	Strategy      string   `json:"strategy"`       // "fallback" or "single"
+	BindInterface string   `json:"bind_interface"`  // optional: network interface for egress
+	BindAddress   string   `json:"bind_address"`    // optional: source address for egress
+	TimeoutSecs   int      `json:"timeout_seconds"`
 }
 
-// SourceState holds the runtime state for a source.
-type SourceState struct {
-	SourceID            int64     `json:"source_id"`
+// WANInterfaceState holds the runtime state for a WAN interface.
+type WANInterfaceState struct {
+	WANInterfaceID      int64     `json:"wan_interface_id"`
 	LastObservedIP      string    `json:"last_observed_ip"`
 	LastCheckAt         time.Time `json:"last_check_at"`
 	LastSuccessAt       time.Time `json:"last_success_at"`
@@ -45,9 +45,9 @@ type SourceState struct {
 	LastError           string    `json:"last_error"`
 }
 
-// DefaultSourceConfig returns sensible defaults for a new source.
-func DefaultSourceConfig() SourceConfig {
-	return SourceConfig{
+// DefaultWANInterfaceConfig returns sensible defaults for a new WAN interface.
+func DefaultWANInterfaceConfig() WANInterfaceConfig {
+	return WANInterfaceConfig{
 		ProbeURLs: []string{
 			"https://api.ipify.org",
 			"https://checkip.amazonaws.com",
@@ -60,13 +60,13 @@ func DefaultSourceConfig() SourceConfig {
 
 // boundClients caches HTTP clients per bind config to avoid transport leaks.
 var (
-	boundClientsMu   sync.Mutex
+	boundClientsMu    sync.Mutex
 	boundClientsCache = make(map[string]*http.Client)
 )
 
 // DetectIP probes the configured URLs to determine the current public IP.
 // Uses the fallback strategy: try each URL in order, return first valid result.
-func DetectIP(ctx context.Context, cfg SourceConfig, baseClient *http.Client) (string, error) {
+func DetectIP(ctx context.Context, cfg WANInterfaceConfig, baseClient *http.Client) (string, error) {
 	if len(cfg.ProbeURLs) == 0 {
 		return "", fmt.Errorf("no probe URLs configured")
 	}
@@ -130,7 +130,7 @@ func probeIP(ctx context.Context, client *http.Client, url string, timeout time.
 }
 
 // getBoundClient returns a cached HTTP client bound to a specific interface/address.
-func getBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
+func getBoundClient(cfg WANInterfaceConfig, timeout time.Duration) *http.Client {
 	key := fmt.Sprintf("%s|%s|%s", cfg.BindInterface, cfg.BindAddress, timeout)
 	boundClientsMu.Lock()
 	defer boundClientsMu.Unlock()
@@ -144,7 +144,7 @@ func getBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
 }
 
 // buildBoundClient creates an HTTP client that binds to a specific interface or address.
-func buildBoundClient(cfg SourceConfig, timeout time.Duration) *http.Client {
+func buildBoundClient(cfg WANInterfaceConfig, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: timeout}
 
 	if cfg.BindAddress != "" {

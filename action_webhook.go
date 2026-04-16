@@ -23,16 +23,18 @@ type webhookConfig struct {
 }
 
 // WebhookTemplateData is the context passed to body templates.
+// SourceName is kept as an alias for backward compatibility with existing templates.
 type WebhookTemplateData struct {
-	SourceName string
-	NewIP      string
-	OldIP      string
-	Event      string
-	Timestamp  string
+	WANInterfaceName string
+	SourceName       string // alias for WANInterfaceName (backward compat)
+	NewIP            string
+	OldIP            string
+	Event            string
+	Timestamp        string
 }
 
 // webhookFuncs provides template functions for safe JSON interpolation.
-// Usage in body_template: {{json .SourceName}} outputs a JSON-escaped string (with quotes).
+// Usage in body_template: {{json .WANInterfaceName}} outputs a JSON-escaped string (with quotes).
 var webhookFuncs = template.FuncMap{
 	"json": func(v interface{}) string {
 		b, _ := json.Marshal(v)
@@ -48,7 +50,7 @@ func (e *WebhookExecutor) DefaultConfig() json.RawMessage {
 	cfg := webhookConfig{
 		Method:       "POST",
 		Headers:      map[string]string{"Content-Type": "application/json"},
-		BodyTemplate: `{"ip":{{json .NewIP}},"old":{{json .OldIP}},"source":{{json .SourceName}},"event":{{json .Event}}}`,
+		BodyTemplate: `{"ip":{{json .NewIP}},"old":{{json .OldIP}},"wan_interface":{{json .WANInterfaceName}},"event":{{json .Event}}}`,
 	}
 	data, _ := json.Marshal(cfg)
 	return data
@@ -59,7 +61,7 @@ func (e *WebhookExecutor) ConfigSchema() []ConfigField {
 		{Name: "url", Label: "URL", Type: "text", Required: true, Placeholder: "https://example.com/webhook"},
 		{Name: "method", Label: "HTTP Method", Type: "select", Required: true, Placeholder: "POST"},
 		{Name: "headers", Label: "Headers", Type: "textarea", Required: false, HelpText: "JSON object of header key-value pairs"},
-		{Name: "body_template", Label: "Body Template", Type: "textarea", Required: false, HelpText: "Go template with {{.NewIP}}, {{.OldIP}}, {{.SourceName}}, {{.Event}}, {{.Timestamp}}"},
+		{Name: "body_template", Label: "Body Template", Type: "textarea", Required: false, HelpText: "Go template with {{.NewIP}}, {{.OldIP}}, {{.WANInterfaceName}}, {{.Event}}, {{.Timestamp}}"},
 	}
 }
 
@@ -98,11 +100,12 @@ func (e *WebhookExecutor) Execute(ctx context.Context, event IPEvent, raw json.R
 			return fmt.Errorf("parsing template: %w", err)
 		}
 		data := WebhookTemplateData{
-			SourceName: event.SourceName,
-			NewIP:      event.NewIP,
-			OldIP:      event.OldIP,
-			Event:      event.EventType,
-			Timestamp:  event.Timestamp,
+			WANInterfaceName: event.WANInterfaceName,
+			SourceName:       event.WANInterfaceName, // backward compat alias
+			NewIP:            event.NewIP,
+			OldIP:            event.OldIP,
+			Event:            event.EventType,
+			Timestamp:        event.Timestamp,
 		}
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, data); err != nil {

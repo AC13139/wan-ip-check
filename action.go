@@ -18,52 +18,52 @@ type Action struct {
 	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
-// SourceAction links a source to an action with routing config.
-type SourceAction struct {
-	SourceID       int64           `json:"source_id"`
-	ActionID       int64           `json:"action_id"`
-	TriggerOn      string          `json:"trigger_on"` // ip_changed, ip_unchanged_daily, both
-	RunOrder       int             `json:"run_order"`
-	Enabled        bool            `json:"enabled"`
+// WANInterfaceAction links a WAN interface to an action with routing config.
+type WANInterfaceAction struct {
+	WANInterfaceID   int64           `json:"wan_interface_id"`
+	ActionID         int64           `json:"action_id"`
+	TriggerOn        string          `json:"trigger_on"` // ip_changed, ip_unchanged_daily, both
+	RunOrder         int             `json:"run_order"`
+	Enabled          bool            `json:"enabled"`
 	// Joined fields from actions table (populated by GetLinkedActions)
-	ActionType     string          `json:"action_type"`
-	ActionName     string          `json:"action_name"`
+	ActionType       string          `json:"action_type"`
+	ActionName       string          `json:"action_name"`
 	ActionConfigJSON json.RawMessage `json:"action_config"`
 }
 
 // ActionRun records the result of executing an action.
 type ActionRun struct {
-	ID         int64     `json:"id"`
-	SourceID   int64     `json:"source_id"`
-	ActionID   int64     `json:"action_id"`
-	EventType  string    `json:"event_type"`
-	OldIP      string    `json:"old_ip"`
-	NewIP      string    `json:"new_ip"`
-	Status     string    `json:"status"` // success, failed, skipped
-	NeedsRetry bool      `json:"needs_retry"`
-	ErrorMsg   string    `json:"error_msg"`
-	ExecutedAt time.Time `json:"executed_at"`
+	ID             int64     `json:"id"`
+	WANInterfaceID int64     `json:"wan_interface_id"`
+	ActionID       int64     `json:"action_id"`
+	EventType      string    `json:"event_type"`
+	OldIP          string    `json:"old_ip"`
+	NewIP          string    `json:"new_ip"`
+	Status         string    `json:"status"` // success, failed, skipped
+	NeedsRetry     bool      `json:"needs_retry"`
+	ErrorMsg       string    `json:"error_msg"`
+	ExecutedAt     time.Time `json:"executed_at"`
 }
 
 // ActionRunWithType extends ActionRun with the action's type (for retry dispatch).
 type ActionRunWithType struct {
-	ID         int64  `json:"id"`
-	SourceID   int64  `json:"source_id"`
-	ActionID   int64  `json:"action_id"`
-	EventType  string `json:"event_type"`
-	OldIP      string `json:"old_ip"`
-	NewIP      string `json:"new_ip"`
-	ActionType string `json:"action_type"`
+	ID             int64  `json:"id"`
+	WANInterfaceID int64  `json:"wan_interface_id"`
+	ActionID       int64  `json:"action_id"`
+	EventType      string `json:"event_type"`
+	OldIP          string `json:"old_ip"`
+	NewIP          string `json:"new_ip"`
+	ActionType     string `json:"action_type"`
 }
 
 // IPEvent carries event data passed to action executors.
 type IPEvent struct {
-	SourceID   int64  `json:"source_id"`
-	SourceName string `json:"source_name"`
-	EventType  string `json:"event_type"` // ip_changed, ip_unchanged_daily
-	OldIP      string `json:"old_ip"`
-	NewIP      string `json:"new_ip"`
-	Timestamp  string `json:"timestamp"` // RFC3339
+	WANInterfaceID   int64  `json:"wan_interface_id"`
+	WANInterfaceName string `json:"wan_interface_name"`
+	EventType        string `json:"event_type"` // ip_changed, ip_unchanged_daily
+	OldIP            string `json:"old_ip"`
+	NewIP            string `json:"new_ip"`
+	Timestamp        string `json:"timestamp"` // RFC3339
 }
 
 // ActionExecutor is the interface that action type implementations must satisfy.

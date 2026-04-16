@@ -13,7 +13,7 @@ Yes — tools like [oznu/cloudflare-ddns](https://github.com/oznu/cloudflare-ddn
 | Update DNS A records | Yes | Yes (Action) |
 | Update Cloudflare Gateway source IP | No | Yes (Action) |
 | Notify via Discord/webhook | No | Yes (Action) |
-| Monitor multiple gateways | No | Yes (Sources) |
+| Monitor multiple gateways | No | Yes (WAN Interfaces) |
 | Web dashboard for status | No | Yes |
 | IP change history with logs | No | Yes |
 | Custom webhook to any service | No | Yes (Action) |
@@ -28,25 +28,25 @@ Yes — tools like [oznu/cloudflare-ddns](https://github.com/oznu/cloudflare-ddn
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│              wan-ip-check                    │
-│                                              │
-│  Sources ──→ IP Detection ──→ Actions        │
-│                                              │
-│  ┌──────────────┐    ┌───────────────────┐  │
-│  │ Home Gateway  │    │ Cloudflare DNS    │  │
-│  │ VPN Gateway   │    │ Cloudflare Gateway│  │
-│  │ ...           │    │ Discord           │  │
-│  └──────────────┘    │ Custom Webhook    │  │
-│                       └───────────────────┘  │
-│                                              │
-│  Web UI (:7373)  ·  REST API  ·  SQLite DB   │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│                   wan-ip-check                      │
+│                                                     │
+│  WAN Interfaces ──→ IP Detection ──→ Actions        │
+│                                                     │
+│  ┌──────────────┐    ┌───────────────────┐         │
+│  │ Home Gateway  │    │ Cloudflare DNS    │         │
+│  │ VPN Gateway   │    │ Cloudflare Gateway│         │
+│  │ ...           │    │ Discord           │         │
+│  └──────────────┘    │ Custom Webhook    │         │
+│                       └───────────────────┘         │
+│                                                     │
+│  Web UI (:7373)  ·  REST API  ·  SQLite DB          │
+└─────────────────────────────────────────────────────┘
 ```
 
-- **Sources** detect your WAN IP using configurable probe services (primary + fallback)
+- **WAN Interfaces** detect your WAN IP using configurable probe services (primary + fallback)
 - **Actions** execute when an IP changes (or as a daily summary)
-- **Source→Action links** let different gateways trigger different actions
+- **WAN Interface→Action links** let different gateways trigger different actions
 - Everything configurable via Web UI — no YAML or config files to manage
 
 ## Quick Start
@@ -63,7 +63,7 @@ docker run -d \
   ac13139/wan-ip-check:latest
 ```
 
-Open `http://your-server:7373` to configure sources and actions via the Web UI.
+Open `http://your-server:7373` to configure WAN interfaces and actions via the Web UI.
 
 ### Docker Compose
 
@@ -107,8 +107,8 @@ After migration, the database is the source of truth. Use the Web UI to make cha
 
 The dashboard at `http://localhost:7373` provides:
 
-- **Dashboard** — Current IP per source, health status, recent events
-- **Sources** — Manage IP detection sources (probe URLs, schedule, interface binding)
+- **Dashboard** — Current IP per WAN interface, health status, recent events
+- **WAN Interfaces** — Manage IP detection interfaces (probe URLs, schedule, interface binding)
 - **Actions** — Configure what happens on IP change (Cloudflare, Discord, webhooks)
 - **History** — Filterable event log with per-action results
 - **Settings** — Daily summary time, timezone, encryption status
@@ -134,37 +134,37 @@ Updates Zero Trust Gateway DNS location source IPv4 address. Essential for Cloud
 
 ### Discord
 
-Sends rich embed notifications via webhook. Shows old IP, new IP, source name, and a daily "no change" summary. Requires an HTTP proxy in regions where Discord is blocked (e.g., China).
+Sends rich embed notifications via webhook. Shows old IP, new IP, WAN interface name, and a daily "no change" summary. Requires an HTTP proxy in regions where Discord is blocked (e.g., China).
 
 ### Custom Webhook
 
 Send a POST/PUT/PATCH to any URL with a templated body. Use Go template syntax:
 
 ```json
-{"ip": {{json .NewIP}}, "old": {{json .OldIP}}, "source": {{json .SourceName}}, "event": {{json .Event}}}
+{"ip": {{json .NewIP}}, "old": {{json .OldIP}}, "wan_interface": {{json .WANInterfaceName}}, "event": {{json .Event}}}
 ```
 
-Available fields: `{{.NewIP}}`, `{{.OldIP}}`, `{{.SourceName}}`, `{{.Event}}`, `{{.Timestamp}}`. Use `{{json .Field}}` for safe JSON escaping.
+Available fields: `{{.NewIP}}`, `{{.OldIP}}`, `{{.WANInterfaceName}}`, `{{.Event}}`, `{{.Timestamp}}`. Use `{{json .Field}}` for safe JSON escaping.
 
-## Multi-Source Monitoring
+## Multi-WAN-Interface Monitoring
 
-If you have multiple WAN gateways (e.g., ISP + VPN), create a Source for each:
+If you have multiple WAN gateways (e.g., ISP + VPN), create a WAN Interface for each:
 
 - **Home Gateway** → Cloudflare DNS for `home.example.com` + Discord alert
 - **VPN Gateway** → Cloudflare DNS for `vpn.example.com` + CF Gateway location update
 
-Each source checks independently on its own schedule, with its own probe URLs, and triggers only its linked actions.
+Each WAN interface checks independently on its own schedule, with its own probe URLs, and triggers only its linked actions.
 
 ## IP Detection
 
-Each source probes external services to determine the public IP. Default strategy: **primary + fallback** — try each URL in order, return the first valid IPv4.
+Each WAN interface probes external services to determine the public IP. Default strategy: **primary + fallback** — try each URL in order, return the first valid IPv4.
 
 Default probe URLs:
 1. `https://api.ipify.org`
 2. `https://checkip.amazonaws.com`
 3. `https://ifconfig.me/ip`
 
-You can add, remove, or reorder URLs per source. For multi-gateway setups, use interface binding to ensure each source checks through the correct gateway.
+You can add, remove, or reorder URLs per WAN interface. For multi-gateway setups, use interface binding to ensure each WAN interface checks through the correct gateway.
 
 ## Security
 
@@ -205,11 +205,11 @@ All endpoints are available at `/api/*` for programmatic access:
 # Status
 curl http://localhost:7373/api/status
 
-# List sources with state
-curl http://localhost:7373/api/sources
+# List WAN interfaces with state
+curl http://localhost:7373/api/wan-interfaces
 
 # Trigger manual check
-curl -X POST http://localhost:7373/api/sources/1/check
+curl -X POST http://localhost:7373/api/wan-interfaces/1/check
 
 # List actions (secrets masked)
 curl http://localhost:7373/api/actions
@@ -235,8 +235,8 @@ wan-ip-check/
 ├── main.go              # Entry point, HTTP clients, PBR, signal handling
 ├── config.go            # Boot config, env-to-DB migration
 ├── database.go          # SQLite schema, migrations, queries
-├── source.go            # Source model, IP detection (primary+fallback)
-├── dispatcher.go        # Cron scheduler, source→event→action dispatch
+├── wan_interface.go     # WAN interface model, IP detection (primary+fallback)
+├── dispatcher.go        # Cron scheduler, WAN interface→event→action dispatch
 ├── action.go            # Action interface, registry, encryption helpers
 ├── action_cfdns.go      # Cloudflare DNS executor
 ├── action_cfgateway.go  # Cloudflare Gateway executor

@@ -52,7 +52,7 @@ func loadTemplates() (*Templates, error) {
 	}
 	layoutContent := string(layoutBytes)
 
-	pages := []string{"dashboard", "sources", "source_form", "actions", "action_form", "history", "settings"}
+	pages := []string{"dashboard", "wan_interfaces", "wan_interface_form", "actions", "action_form", "history", "settings"}
 	for _, page := range pages {
 		pageBytes, err := fs.ReadFile(templateFS, "templates/"+page+".html")
 		if err != nil {
@@ -71,9 +71,9 @@ func loadTemplates() (*Templates, error) {
 
 	// Partials — read and parse individually
 	partialFiles := map[string]string{
-		"history-rows": "templates/history.html",
-		"config-fields": "templates/partials/config_fields.html",
-		"source-card":   "templates/partials/source_card.html",
+		"history-rows":       "templates/history.html",
+		"config-fields":      "templates/partials/config_fields.html",
+		"wan-interface-card": "templates/partials/wan_interface_card.html",
 	}
 	for name, path := range partialFiles {
 		content, err := fs.ReadFile(templateFS, path)
@@ -173,100 +173,100 @@ func getCSRFToken(r *http.Request) string {
 	return cookie.Value
 }
 
-// --- Source Display Data ---
+// --- WAN Interface Display Data ---
 
-type SourceDisplay struct {
-	Source          Source
-	IP              string
-	StatusClass     string // ok, changed, failed
-	StatusText      string
+type WANInterfaceDisplay struct {
+	WANInterface     WANInterface
+	IP               string
+	StatusClass      string // ok, changed, failed
+	StatusText       string
 	StatusBadgeClass string
-	LastCheck       string
-	ActionCount     int
+	LastCheck        string
+	ActionCount      int
 }
 
-func (s *Server) buildSourceDisplay(src Source) SourceDisplay {
-	sd := SourceDisplay{Source: src}
-	state, err := s.app.db.GetSourceState(src.ID)
+func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
+	wd := WANInterfaceDisplay{WANInterface: wi}
+	state, err := s.app.db.GetWANInterfaceState(wi.ID)
 	if err == nil && state != nil {
-		sd.IP = state.LastObservedIP
-		sd.StatusClass = state.LastStatus
-		sd.StatusText = state.LastStatus
-		if sd.StatusText == "" {
-			sd.StatusText = "pending"
+		wd.IP = state.LastObservedIP
+		wd.StatusClass = state.LastStatus
+		wd.StatusText = state.LastStatus
+		if wd.StatusText == "" {
+			wd.StatusText = "pending"
 		}
 		switch state.LastStatus {
 		case "ok":
-			sd.StatusBadgeClass = "badge badge-success"
+			wd.StatusBadgeClass = "badge badge-success"
 		case "changed":
-			sd.StatusBadgeClass = "badge badge-info"
+			wd.StatusBadgeClass = "badge badge-info"
 		case "failed":
-			sd.StatusBadgeClass = "badge badge-error"
+			wd.StatusBadgeClass = "badge badge-error"
 		default:
-			sd.StatusBadgeClass = "badge badge-muted"
+			wd.StatusBadgeClass = "badge badge-muted"
 		}
 		if !state.LastCheckAt.IsZero() {
-			sd.LastCheck = relativeTime(state.LastCheckAt)
+			wd.LastCheck = relativeTime(state.LastCheckAt)
 		}
 	}
-	count, _ := s.app.db.GetSourceLinkedActionCount(src.ID)
-	sd.ActionCount = count
-	return sd
+	count, _ := s.app.db.GetWANInterfaceLinkedActionCount(wi.ID)
+	wd.ActionCount = count
+	return wd
 }
 
 // --- Page Handlers ---
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
-	var displays []SourceDisplay
-	for _, src := range sources {
-		displays = append(displays, s.buildSourceDisplay(src))
+	wanInterfaces, _ := s.app.db.ListWANInterfaces()
+	var displays []WANInterfaceDisplay
+	for _, wi := range wanInterfaces {
+		displays = append(displays, s.buildWANInterfaceDisplay(wi))
 	}
 
 	runs, _, _ := s.app.db.GetRecentRunsJoined(HistoryFilter{Limit: 10})
 
 	data := struct {
 		PageData
-		Sources    []SourceDisplay
-		RecentRuns []ActionRunJoined
+		WANInterfaces []WANInterfaceDisplay
+		RecentRuns    []ActionRunJoined
 	}{
-		PageData:   PageData{Title: "Dashboard", Active: "dashboard", CSRFToken: getCSRFToken(r)},
-		Sources:    displays,
-		RecentRuns: runs,
+		PageData:      PageData{Title: "Dashboard", Active: "dashboard", CSRFToken: getCSRFToken(r)},
+		WANInterfaces: displays,
+		RecentRuns:    runs,
 	}
 	s.templates.renderPage(w, "dashboard", data)
 }
 
-func (s *Server) handleSourcesPage(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
-	var displays []SourceDisplay
-	for _, src := range sources {
-		displays = append(displays, s.buildSourceDisplay(src))
+func (s *Server) handleWANInterfacesPage(w http.ResponseWriter, r *http.Request) {
+	wanInterfaces, _ := s.app.db.ListWANInterfaces()
+	var displays []WANInterfaceDisplay
+	for _, wi := range wanInterfaces {
+		displays = append(displays, s.buildWANInterfaceDisplay(wi))
 	}
 
 	data := struct {
 		PageData
-		Sources []SourceDisplay
+		WANInterfaces []WANInterfaceDisplay
 	}{
-		PageData: PageData{Title: "Sources", Active: "sources", CSRFToken: getCSRFToken(r)},
-		Sources:  displays,
+		PageData:      PageData{Title: "WAN Interfaces", Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
+		WANInterfaces: displays,
 	}
-	s.templates.renderPage(w, "sources", data)
+	s.templates.renderPage(w, "wan_interfaces", data)
 }
 
-func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	isEdit := idStr != ""
 
 	data := struct {
 		PageData
-		Source     *Source
-		IsEdit    bool
-		AllActions  []Action
-		LinkedIDs  map[int64]bool
-		LinkedTriggers map[int64]string // action ID → trigger_on
+		WANInterface   *WANInterface
+		IsEdit         bool
+		AllActions     []Action
+		LinkedIDs      map[int64]bool
+		LinkedTriggers map[int64]string // action ID -> trigger_on
 	}{
-		PageData:  PageData{Active: "sources", CSRFToken: getCSRFToken(r)},
+		PageData:       PageData{Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
 		IsEdit:         isEdit,
 		LinkedIDs:      make(map[int64]bool),
 		LinkedTriggers: make(map[int64]string),
@@ -274,13 +274,13 @@ func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
 
 	if isEdit {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
-		src, err := s.app.db.GetSource(id)
+		wi, err := s.app.db.GetWANInterface(id)
 		if err != nil {
-			http.Redirect(w, r, "/sources", http.StatusSeeOther)
+			http.Redirect(w, r, "/wan-interfaces", http.StatusSeeOther)
 			return
 		}
-		data.Source = src
-		data.Title = "Edit Source: " + src.Name
+		data.WANInterface = wi
+		data.Title = "Edit WAN Interface: " + wi.Name
 
 		links, _ := s.app.db.GetLinkedActions(id, "")
 		for _, l := range links {
@@ -288,29 +288,29 @@ func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
 			data.LinkedTriggers[l.ActionID] = l.TriggerOn
 		}
 	} else {
-		data.Title = "Add Source"
-		defaultCfg := DefaultSourceConfig()
-		data.Source = &Source{Config: defaultCfg, Schedule: "*/5 * * * *", Timezone: "Local"}
+		data.Title = "Add WAN Interface"
+		defaultCfg := DefaultWANInterfaceConfig()
+		data.WANInterface = &WANInterface{Config: defaultCfg, Schedule: "*/5 * * * *", Timezone: "Local"}
 	}
 
 	actions, _ := s.app.db.ListActions()
 	data.AllActions = actions
 
-	s.templates.renderPage(w, "source_form", data)
+	s.templates.renderPage(w, "wan_interface_form", data)
 }
 
 func (s *Server) handleActionsPage(w http.ResponseWriter, r *http.Request) {
 	actions, _ := s.app.db.ListActions()
 
 	type ActionDisplay struct {
-		Action        Action
-		LinkedSources []string
+		Action            Action
+		LinkedWANInterfaces []string
 	}
 	var displays []ActionDisplay
 	for _, a := range actions {
 		a.ConfigJSON = maskSecrets(a.Type, a.ConfigJSON, s.app.registry)
-		sources, _ := s.app.db.GetActionLinkedSources(a.ID)
-		displays = append(displays, ActionDisplay{Action: a, LinkedSources: sources})
+		wanInterfaces, _ := s.app.db.GetActionLinkedWANInterfaces(a.ID)
+		displays = append(displays, ActionDisplay{Action: a, LinkedWANInterfaces: wanInterfaces})
 	}
 
 	data := struct {
@@ -378,22 +378,22 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHistoryPage(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
+	wanInterfaces, _ := s.app.db.ListWANInterfaces()
 	filter := parseHistoryFilter(r)
 	runs, total, _ := s.app.db.GetRecentRunsJoined(filter)
 
 	data := struct {
 		PageData
-		Sources []Source
-		Runs    []ActionRunJoined
-		Total   int
-		Limit   int
+		WANInterfaces []WANInterface
+		Runs          []ActionRunJoined
+		Total         int
+		Limit         int
 	}{
-		PageData: PageData{Title: "Event History", Active: "history", CSRFToken: getCSRFToken(r)},
-		Sources:  sources,
-		Runs:     runs,
-		Total:    total,
-		Limit:    filter.Limit,
+		PageData:      PageData{Title: "Event History", Active: "history", CSRFToken: getCSRFToken(r)},
+		WANInterfaces: wanInterfaces,
+		Runs:          runs,
+		Total:         total,
+		Limit:         filter.Limit,
 	}
 	s.templates.renderPage(w, "history", data)
 }
@@ -431,31 +431,31 @@ func (s *Server) handleUIManualCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.dispatcher.checkSource(r.Context(), id)
+	s.dispatcher.checkWANInterface(r.Context(), id)
 
-	src, err := s.app.db.GetSource(id)
+	wi, err := s.app.db.GetWANInterface(id)
 	if err != nil {
-		http.Error(w, "source not found", http.StatusNotFound)
+		http.Error(w, "WAN interface not found", http.StatusNotFound)
 		return
 	}
-	display := s.buildSourceDisplay(*src)
-	s.templates.renderPartial(w, "source-card", display)
+	display := s.buildWANInterfaceDisplay(*wi)
+	s.templates.renderPartial(w, "wan-interface-card", display)
 }
 
-func (s *Server) handleUIToggleSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIToggleWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	src, err := s.app.db.GetSource(id)
+	wi, err := s.app.db.GetWANInterface(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	src.Enabled = !src.Enabled
-	if err := s.app.db.UpdateSource(src); err != nil {
-		http.Error(w, "failed to update source", http.StatusInternalServerError)
+	wi.Enabled = !wi.Enabled
+	if err := s.app.db.UpdateWANInterface(wi); err != nil {
+		http.Error(w, "failed to update WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
+	w.Header().Set("HX-Redirect", "/wan-interfaces")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -501,11 +501,11 @@ func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
 
 	decrypted, _ := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
 	event := IPEvent{
-		SourceName: "Test",
-		EventType:  "ip_changed",
-		OldIP:      "203.0.113.0",
-		NewIP:      "203.0.113.1",
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+		WANInterfaceName: "Test",
+		EventType:        "ip_changed",
+		OldIP:            "203.0.113.0",
+		NewIP:            "203.0.113.1",
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := executor.Execute(r.Context(), event, decrypted); err != nil {
 		fmt.Fprintf(w, `<span class="badge badge-error">%s</span>`, template.HTMLEscapeString(err.Error()))
@@ -514,10 +514,10 @@ func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleUIDeleteSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIDeleteWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := s.app.db.DeleteSource(id); err != nil {
-		http.Error(w, "failed to delete source", http.StatusInternalServerError)
+	if err := s.app.db.DeleteWANInterface(id); err != nil {
+		http.Error(w, "failed to delete WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
@@ -557,14 +557,14 @@ func (s *Server) handleUIHistoryTable(w http.ResponseWriter, r *http.Request) {
 	s.templates.renderPartial(w, "history-rows", data)
 }
 
-func (s *Server) handleUICreateSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	src := &Source{
+	wi := &WANInterface{
 		Name:     r.FormValue("name"),
 		Enabled:  true,
 		Schedule: r.FormValue("schedule"),
 		Timezone: r.FormValue("timezone"),
-		Config: SourceConfig{
+		Config: WANInterfaceConfig{
 			ProbeURLs:     parseLines(r.FormValue("probe_urls")),
 			Strategy:      r.FormValue("strategy"),
 			BindInterface: r.FormValue("bind_interface"),
@@ -572,34 +572,34 @@ func (s *Server) handleUICreateSource(w http.ResponseWriter, r *http.Request) {
 			TimeoutSecs:   parseInt(r.FormValue("timeout"), 10),
 		},
 	}
-	if src.Name == "" {
+	if wi.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	if src.Schedule == "" {
-		src.Schedule = "*/5 * * * *"
+	if wi.Schedule == "" {
+		wi.Schedule = "*/5 * * * *"
 	}
-	if err := validateCron(src.Schedule); err != nil {
+	if err := validateCron(wi.Schedule); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if _, err := s.app.db.CreateSource(src); err != nil {
-		http.Error(w, "failed to create source", http.StatusInternalServerError)
+	if _, err := s.app.db.CreateWANInterface(wi); err != nil {
+		http.Error(w, "failed to create WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
+	w.Header().Set("HX-Redirect", "/wan-interfaces")
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIUpdateWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	r.ParseForm()
 
-	existing, err := s.app.db.GetSource(id)
+	existing, err := s.app.db.GetWANInterface(id)
 	if err != nil {
-		http.Error(w, "source not found", http.StatusNotFound)
+		http.Error(w, "WAN interface not found", http.StatusNotFound)
 		return
 	}
 
@@ -607,7 +607,7 @@ func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
 	existing.Enabled = r.FormValue("enabled") == "true"
 	existing.Schedule = r.FormValue("schedule")
 	existing.Timezone = r.FormValue("timezone")
-	existing.Config = SourceConfig{
+	existing.Config = WANInterfaceConfig{
 		ProbeURLs:     parseLines(r.FormValue("probe_urls")),
 		Strategy:      r.FormValue("strategy"),
 		BindInterface: r.FormValue("bind_interface"),
@@ -620,8 +620,8 @@ func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.app.db.UpdateSource(existing); err != nil {
-		http.Error(w, "failed to update source", http.StatusInternalServerError)
+	if err := s.app.db.UpdateWANInterface(existing); err != nil {
+		http.Error(w, "failed to update WAN interface", http.StatusInternalServerError)
 		return
 	}
 
@@ -636,16 +636,16 @@ func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
 		if triggerOn == "" {
 			triggerOn = "ip_changed"
 		}
-		s.app.db.LinkAction(&SourceAction{
-			SourceID:  id,
-			ActionID:  aid,
-			TriggerOn: triggerOn,
-			Enabled:   true,
+		s.app.db.LinkAction(&WANInterfaceAction{
+			WANInterfaceID: id,
+			ActionID:       aid,
+			TriggerOn:      triggerOn,
+			Enabled:        true,
 		})
 	}
 
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
+	w.Header().Set("HX-Redirect", "/wan-interfaces")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -788,8 +788,8 @@ func buildConfigFromForm(r *http.Request, schema []ConfigField) json.RawMessage 
 
 func parseHistoryFilter(r *http.Request) HistoryFilter {
 	f := HistoryFilter{Limit: 50}
-	if v := r.URL.Query().Get("source"); v != "" {
-		f.SourceID, _ = strconv.ParseInt(v, 10, 64)
+	if v := r.URL.Query().Get("wan_interface"); v != "" {
+		f.WANInterfaceID, _ = strconv.ParseInt(v, 10, 64)
 	}
 	f.EventType = r.URL.Query().Get("event")
 	f.Status = r.URL.Query().Get("status")
