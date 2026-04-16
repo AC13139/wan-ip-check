@@ -1,14 +1,14 @@
 {{define "content"}}
 <div class="flex gap-md mb-lg">
   <div class="form-group" style="margin-bottom:0">
-    <select class="form-select" id="filter-source"
+    <select class="form-select" id="filter-waninterface"
             hx-get="/ui/history-table"
             hx-target="#history-tbody"
             hx-swap="innerHTML"
-            hx-include="#filter-source, #filter-event, #filter-status"
-            name="source">
-      <option value="">All Sources</option>
-      {{range .Sources}}
+            hx-include="#filter-waninterface, #filter-event, #filter-status"
+            name="waninterface">
+      <option value="">All WAN Interfaces</option>
+      {{range .WANInterfaces}}
       <option value="{{.ID}}">{{.Name}}</option>
       {{end}}
     </select>
@@ -18,7 +18,7 @@
             hx-get="/ui/history-table"
             hx-target="#history-tbody"
             hx-swap="innerHTML"
-            hx-include="#filter-source, #filter-event, #filter-status"
+            hx-include="#filter-waninterface, #filter-event, #filter-status"
             name="event">
       <option value="">All Events</option>
       <option value="ip_changed">IP Changed</option>
@@ -30,7 +30,7 @@
             hx-get="/ui/history-table"
             hx-target="#history-tbody"
             hx-swap="innerHTML"
-            hx-include="#filter-source, #filter-event, #filter-status"
+            hx-include="#filter-waninterface, #filter-event, #filter-status"
             name="status">
       <option value="">All Statuses</option>
       <option value="success">Success</option>
@@ -65,7 +65,7 @@
           hx-get="/ui/history-table"
           hx-target="#history-tbody"
           hx-swap="beforeend"
-          hx-include="#filter-source, #filter-event, #filter-status"
+          hx-include="#filter-waninterface, #filter-event, #filter-status"
           hx-vals='{"offset": "{{.Limit}}", "limit": "50"}'
           hx-on::after-request="this.setAttribute('hx-vals', JSON.stringify({offset: String(parseInt(JSON.parse(this.getAttribute('hx-vals')).offset) + 50), limit: '50'}))">Load More</button>
   <div class="text-sm text-muted mt-lg">Showing {{len .Runs}} of {{.Total}} events</div>
@@ -77,7 +77,7 @@
 {{range .Runs}}
 <tr>
   <td class="mono-sm">{{.ExecutedAt.Format "2006-01-02 15:04:05"}}</td>
-  <td>{{.SourceName}}</td>
+  <td>{{.WANInterfaceName}}</td>
   <td>
     {{if eq .EventType "ip_changed"}}<span class="badge badge-info">ip_changed</span>
     {{else}}<span class="badge badge-muted">daily_summary</span>{{end}}

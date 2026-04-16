@@ -1,5 +1,5 @@
 {{define "content"}}
-<form {{if .IsEdit}}hx-post="/ui/sources/{{.Source.ID}}"{{else}}hx-post="/ui/sources"{{end}}
+<form {{if .IsEdit}}hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}"{{else}}hx-post="/ui/sources"{{end}}
       hx-target="body">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
@@ -8,14 +8,14 @@
     <div class="form-group">
       <label class="form-label">Name</label>
       <input type="text" name="name" class="form-input" required
-             value="{{if .IsEdit}}{{.Source.Name}}{{end}}"
+             value="{{if .IsEdit}}{{.WANInterface.Name}}{{end}}"
              placeholder="e.g., Home Gateway">
     </div>
     {{if .IsEdit}}
     <div class="form-group">
       <label class="form-label">Enabled</label>
       <label class="toggle">
-        <input type="checkbox" name="enabled" value="true" {{if .Source.Enabled}}checked{{end}}>
+        <input type="checkbox" name="enabled" value="true" {{if .WANInterface.Enabled}}checked{{end}}>
         <span class="toggle-track"></span>
         <span class="toggle-thumb"></span>
       </label>
@@ -29,14 +29,14 @@
       <div class="form-group">
         <label class="form-label">Cron Expression</label>
         <input type="text" name="schedule" class="form-input mono"
-               value="{{if .IsEdit}}{{.Source.Schedule}}{{else}}*/5 * * * *{{end}}"
+               value="{{if .IsEdit}}{{.WANInterface.Schedule}}{{else}}*/5 * * * *{{end}}"
                placeholder="*/5 * * * *">
         <div class="form-help">Standard cron format (minute hour dom month dow)</div>
       </div>
       <div class="form-group">
         <label class="form-label">Timezone</label>
         <input type="text" name="timezone" class="form-input"
-               value="{{if .IsEdit}}{{.Source.Timezone}}{{else}}Local{{end}}"
+               value="{{if .IsEdit}}{{.WANInterface.Timezone}}{{else}}Local{{end}}"
                placeholder="Asia/Shanghai or Local">
       </div>
     </div>
@@ -47,20 +47,20 @@
     <div class="form-group">
       <label class="form-label">Probe URLs (one per line, tried in order)</label>
       <textarea name="probe_urls" class="form-textarea mono" rows="4"
-                placeholder="https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip">{{if .IsEdit}}{{range .Source.Config.ProbeURLs}}{{.}}&#10;{{end}}{{else}}https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip{{end}}</textarea>
+                placeholder="https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip">{{if .IsEdit}}{{range .WANInterface.Config.ProbeURLs}}{{.}}&#10;{{end}}{{else}}https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip{{end}}</textarea>
     </div>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Strategy</label>
         <select name="strategy" class="form-select">
-          <option value="fallback" {{if and .IsEdit (eq .Source.Config.Strategy "fallback")}}selected{{end}}>Fallback (try in order)</option>
-          <option value="single" {{if and .IsEdit (eq .Source.Config.Strategy "single")}}selected{{end}}>Single (first URL only)</option>
+          <option value="fallback" {{if and .IsEdit (eq .WANInterface.Config.Strategy "fallback")}}selected{{end}}>Fallback (try in order)</option>
+          <option value="single" {{if and .IsEdit (eq .WANInterface.Config.Strategy "single")}}selected{{end}}>Single (first URL only)</option>
         </select>
       </div>
       <div class="form-group">
         <label class="form-label">Timeout (seconds)</label>
         <input type="number" name="timeout" class="form-input"
-               value="{{if .IsEdit}}{{.Source.Config.TimeoutSecs}}{{else}}10{{end}}"
+               value="{{if .IsEdit}}{{.WANInterface.Config.TimeoutSecs}}{{else}}10{{end}}"
                min="1" max="60">
       </div>
     </div>
@@ -72,14 +72,14 @@
       <div class="form-group">
         <label class="form-label">Bind Interface</label>
         <input type="text" name="bind_interface" class="form-input mono"
-               value="{{if .IsEdit}}{{.Source.Config.BindInterface}}{{end}}"
+               value="{{if .IsEdit}}{{.WANInterface.Config.BindInterface}}{{end}}"
                placeholder="e.g., eth0">
         <div class="form-help">Network interface for egress routing</div>
       </div>
       <div class="form-group">
         <label class="form-label">Bind Address</label>
         <input type="text" name="bind_address" class="form-input mono"
-               value="{{if .IsEdit}}{{.Source.Config.BindAddress}}{{end}}"
+               value="{{if .IsEdit}}{{.WANInterface.Config.BindAddress}}{{end}}"
                placeholder="e.g., 192.168.1.100">
       </div>
     </div>
@@ -111,7 +111,7 @@
 
   <div class="flex gap-sm">
     <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Create Source{{end}}</button>
-    <a href="/sources" class="btn btn-secondary">Cancel</a>
+    <a href="/wan-interfaces" class="btn btn-secondary">Cancel</a>
   </div>
 </form>
 {{end}}

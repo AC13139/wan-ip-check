@@ -18,9 +18,9 @@ type Action struct {
 	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
-// SourceAction links a source to an action with routing config.
-type SourceAction struct {
-	SourceID       int64           `json:"source_id"`
+// WANInterfaceAction links a source to an action with routing config.
+type WANInterfaceAction struct {
+	WANInterfaceID       int64           `json:"source_id"`
 	ActionID       int64           `json:"action_id"`
 	TriggerOn      string          `json:"trigger_on"` // ip_changed, ip_unchanged_daily, both
 	RunOrder       int             `json:"run_order"`
@@ -34,7 +34,7 @@ type SourceAction struct {
 // ActionRun records the result of executing an action.
 type ActionRun struct {
 	ID         int64     `json:"id"`
-	SourceID   int64     `json:"source_id"`
+	WANInterfaceID   int64     `json:"source_id"`
 	ActionID   int64     `json:"action_id"`
 	EventType  string    `json:"event_type"`
 	OldIP      string    `json:"old_ip"`
@@ -48,7 +48,7 @@ type ActionRun struct {
 // ActionRunWithType extends ActionRun with the action's type (for retry dispatch).
 type ActionRunWithType struct {
 	ID         int64  `json:"id"`
-	SourceID   int64  `json:"source_id"`
+	WANInterfaceID   int64  `json:"source_id"`
 	ActionID   int64  `json:"action_id"`
 	EventType  string `json:"event_type"`
 	OldIP      string `json:"old_ip"`
@@ -58,8 +58,8 @@ type ActionRunWithType struct {
 
 // IPEvent carries event data passed to action executors.
 type IPEvent struct {
-	SourceID   int64  `json:"source_id"`
-	SourceName string `json:"source_name"`
+	WANInterfaceID   int64  `json:"source_id"`
+	WANInterfaceName string `json:"source_name"`
 	EventType  string `json:"event_type"` // ip_changed, ip_unchanged_daily
 	OldIP      string `json:"old_ip"`
 	NewIP      string `json:"new_ip"`

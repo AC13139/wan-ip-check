@@ -1,9 +1,9 @@
 {{define "header-actions"}}
-<a href="/sources/new" class="btn btn-primary">+ Add Source</a>
+<a href="/wan-interfaces/new" class="btn btn-primary">+ Add WAN Interface</a>
 {{end}}
 
 {{define "content"}}
-{{if .Sources}}
+{{if .WANInterfaces}}
 <div class="table-wrap">
   <table>
     <thead>
@@ -19,31 +19,31 @@
       </tr>
     </thead>
     <tbody>
-      {{range .Sources}}
-      <tr id="source-row-{{.Source.ID}}">
+      {{range .WANInterfaces}}
+      <tr id="wan-interface-row-{{.WANInterface.ID}}">
         <td><span class="status-dot {{.StatusClass}}"></span></td>
-        <td><a href="/sources/{{.Source.ID}}">{{.Source.Name}}</a></td>
+        <td><a href="/wan-interfaces/{{.WANInterface.ID}}">{{.WANInterface.Name}}</a></td>
         <td class="mono">{{if .IP}}{{.IP}}{{else}}<span class="text-muted">—</span>{{end}}</td>
-        <td class="mono-sm">{{.Source.Schedule}}</td>
+        <td class="mono-sm">{{.WANInterface.Schedule}}</td>
         <td><span class="badge badge-muted">{{.ActionCount}}</span></td>
         <td class="text-sm text-muted">{{.LastCheck}}</td>
         <td>
           <label class="toggle">
-            <input type="checkbox" {{if .Source.Enabled}}checked{{end}}
-                   hx-post="/ui/sources/{{.Source.ID}}/toggle"
-                   hx-target="#source-row-{{.Source.ID}}"
+            <input type="checkbox" {{if .WANInterface.Enabled}}checked{{end}}
+                   hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}/toggle"
+                   hx-target="#wan-interface-row-{{.WANInterface.ID}}"
                    hx-swap="outerHTML">
             <span class="toggle-track"></span>
             <span class="toggle-thumb"></span>
           </label>
         </td>
         <td class="flex gap-xs">
-          <a href="/sources/{{.Source.ID}}" class="btn btn-sm btn-secondary">Edit</a>
+          <a href="/wan-interfaces/{{.WANInterface.ID}}" class="btn btn-sm btn-secondary">Edit</a>
           <button class="btn btn-sm btn-danger"
-                  hx-delete="/ui/sources/{{.Source.ID}}"
-                  hx-target="#source-row-{{.Source.ID}}"
+                  hx-delete="/ui/wan-interfaces/{{.WANInterface.ID}}"
+                  hx-target="#wan-interface-row-{{.WANInterface.ID}}"
                   hx-swap="delete"
-                  hx-confirm="Delete source '{{.Source.Name}}'?">Del</button>
+                  hx-confirm="Delete source '{{.WANInterface.Name}}'?">Del</button>
         </td>
       </tr>
       {{end}}
@@ -52,8 +52,8 @@
 </div>
 {{else}}
 <div class="empty-state">
-  <p>No sources configured.</p>
-  <a href="/sources/new" class="btn btn-primary">Add Source</a>
+  <p>No WAN interfaces configured.</p>
+  <a href="/wan-interfaces/new" class="btn btn-primary">Add WAN Interface</a>
 </div>
 {{end}}
 {{end}}

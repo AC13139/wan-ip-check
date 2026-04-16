@@ -93,12 +93,12 @@ func main() {
 	}
 
 	// Log startup info
-	sources, _ := db.ListSources()
+	sources, _ := db.ListWANInterfaces()
 	actions, _ := db.ListActions()
 	logger.Info("starting wan-ip-check v2",
 		"port", boot.Port,
 		"data_dir", boot.DataDir,
-		"sources", len(sources),
+		"wan_interfaces", len(sources),
 		"actions", len(actions),
 		"pbr", boot.PBREnabled(),
 	)
