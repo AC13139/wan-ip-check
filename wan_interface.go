@@ -112,8 +112,13 @@ func DetectIP(ctx context.Context, cfg WANInterfaceConfig, baseClient *http.Clie
 		return "", fmt.Errorf("building egress client: %w", err)
 	}
 
+	urls := cfg.ProbeURLs
+	if cfg.Strategy == "single" && len(urls) > 0 {
+		urls = urls[:1] // only use the first URL
+	}
+
 	var lastErr error
-	for _, probeURL := range cfg.ProbeURLs {
+	for _, probeURL := range urls {
 		ip, err := probeIP(ctx, client, probeURL, timeout)
 		if err != nil {
 			lastErr = fmt.Errorf("%s: %w", probeURL, err)
@@ -156,7 +161,10 @@ func buildEgressClient(egress EgressConfig, baseClient *http.Client, timeout tim
 		if egress.InterfaceName != "" || egress.SourceAddress != "" {
 			addr := egress.SourceAddress
 			if addr == "" && egress.InterfaceName != "" {
-				resolved, _ := resolveSourceIP(egress.InterfaceName)
+				resolved, err := resolveSourceIP(egress.InterfaceName)
+				if err != nil {
+					return nil, fmt.Errorf("default mode: interface %q not found or has no IPv4: %w", egress.InterfaceName, err)
+				}
 				addr = resolved
 			}
 			if addr != "" {

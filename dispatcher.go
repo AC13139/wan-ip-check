@@ -83,6 +83,22 @@ func (m *PBRManager) CleanupRoute(interfaceName, sourceAddr, gateway string) {
 	m.logger.Info("PBR: cleaned up route", "source", sourceAddr, "gateway", gateway, "table", tbl)
 }
 
+// CleanupAll removes all PBR routes managed by this instance.
+func (m *PBRManager) CleanupAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, tbl := range m.tables {
+		parts := strings.SplitN(key, "|", 3)
+		if len(parts) == 3 {
+			tblStr := fmt.Sprintf("%d", tbl)
+			exec.Command("ip", "rule", "del", "from", parts[1], "lookup", tblStr).Run()
+			exec.Command("ip", "route", "del", "default", "table", tblStr).Run()
+			m.logger.Debug("PBR: cleaned up", "source", parts[1], "table", tbl)
+		}
+	}
+	m.tables = make(map[string]int)
+}
+
 // Dispatcher manages WAN interface check scheduling and action execution.
 type Dispatcher struct {
 	db               *DB
@@ -95,6 +111,7 @@ type Dispatcher struct {
 	entryMap         map[int64]cron.EntryID
 	wanInterfaceLocks map[int64]*sync.Mutex
 	locksMu          sync.Mutex
+	cronMu           sync.Mutex // protects cron lifecycle (Start/Stop/Reload)
 	pbrManager       *PBRManager
 }
 
@@ -139,7 +156,14 @@ func (d *Dispatcher) Stop() {
 // Reload stops the current cron, re-reads WAN interfaces from DB, and reschedules.
 // Called by API handlers after WAN interface create/update/delete.
 func (d *Dispatcher) Reload(ctx context.Context) error {
+	d.cronMu.Lock()
+	defer d.cronMu.Unlock()
+
 	d.logger.Info("reloading dispatcher")
+
+	// Clean up existing PBR routes before reschedule
+	d.pbrManager.CleanupAll()
+
 	if d.cron != nil {
 		<-d.cron.Stop().Done()
 	}

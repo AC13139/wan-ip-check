@@ -185,7 +185,12 @@ func (s *Server) handleUpdateWANInterface(w http.ResponseWriter, r *http.Request
 		}
 		existing.Timezone = update.Timezone
 	}
-	if len(update.Config.ProbeURLs) > 0 {
+	// Update config if any fields are provided (not just probe_urls)
+	if len(update.Config.ProbeURLs) > 0 || update.Config.Egress.Mode != "" || update.Config.Strategy != "" || update.Config.TimeoutSecs > 0 {
+		// Merge: keep existing probe_urls if not provided
+		if len(update.Config.ProbeURLs) == 0 {
+			update.Config.ProbeURLs = existing.Config.ProbeURLs
+		}
 		existing.Config = update.Config
 	}
 	existing.Enabled = update.Enabled

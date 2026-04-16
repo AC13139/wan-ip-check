@@ -137,7 +137,8 @@ func (e *WebhookExecutor) Execute(ctx context.Context, event IPEvent, raw json.R
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("sending request: %w", err)
+		// Sanitize error to avoid leaking webhook URL in error messages/logs
+		return fmt.Errorf("webhook request failed (check URL and connectivity)")
 	}
 	defer resp.Body.Close()
 

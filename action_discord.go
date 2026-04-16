@@ -85,7 +85,8 @@ func (e *DiscordExecutor) postWebhook(ctx context.Context, webhookURL string, pa
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("sending webhook: %w", err)
+		// Sanitize error to avoid leaking webhook URL/token
+		return fmt.Errorf("sending Discord webhook failed (check proxy and webhook URL)")
 	}
 	defer resp.Body.Close()
 
