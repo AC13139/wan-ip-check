@@ -306,33 +306,46 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 	s.templates.renderPage(w, "wan_interface_form", data)
 }
 
-// renderEgressFields renders the egress-fields partial to a string for inline
-// embedding. This lets the form be usable immediately on first page load
-// without a second HTMX round-trip (which was failing behind some reverse
-// proxies).
+// renderEgressFields renders all three egress-mode variants (default,
+// gateway, proxy) wrapped in visibility-control divs. A tiny inline script
+// in the form template shows only the variant matching the current
+// dropdown value. This eliminates the HTMX round-trip on dropdown change
+// (previously failed behind reverse proxies with 522 timeouts) and makes
+// the mode switch instant.
 func (s *Server) renderEgressFields(egress EgressConfig) template.HTML {
 	ifaces, _ := listNetworkInterfaces()
-	mode := egress.Mode
-	if mode == "" {
-		mode = "default"
+	selectedMode := egress.Mode
+	if selectedMode == "" {
+		selectedMode = "default"
 	}
-	var buf strings.Builder
 	tmpl, ok := s.templates.partials["egress-fields"]
 	if !ok {
 		return template.HTML("")
 	}
-	_ = tmpl.Lookup("egress-fields").Execute(&buf, struct {
-		Mode          string
-		Interfaces    []NetworkInterface
-		InterfaceName string
-		Gateway       string
-		ProxyURL      string
-	}{
-		Mode: mode, Interfaces: ifaces,
-		InterfaceName: egress.InterfaceName,
-		Gateway:       egress.Gateway,
-		ProxyURL:      egress.ProxyURL,
-	})
+	render := func(mode string) string {
+		var buf strings.Builder
+		_ = tmpl.Lookup("egress-fields").Execute(&buf, struct {
+			Mode          string
+			Interfaces    []NetworkInterface
+			InterfaceName string
+			Gateway       string
+			ProxyURL      string
+		}{
+			Mode: mode, Interfaces: ifaces,
+			InterfaceName: egress.InterfaceName,
+			Gateway:       egress.Gateway,
+			ProxyURL:      egress.ProxyURL,
+		})
+		return buf.String()
+	}
+	var buf strings.Builder
+	for _, m := range []string{"default", "gateway", "proxy"} {
+		style := "display:none"
+		if m == selectedMode {
+			style = ""
+		}
+		fmt.Fprintf(&buf, `<div data-egress-mode=%q style=%q>%s</div>`, m, style, render(m))
+	}
 	return template.HTML(buf.String())
 }
 
@@ -369,12 +382,13 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		PageData
-		Action       *Action
-		IsEdit       bool
-		ActionType   string
-		Schema       []ConfigField
-		ConfigValues map[string]interface{}
-		AllTypes     []string
+		Action        *Action
+		IsEdit        bool
+		ActionType    string
+		Schema        []ConfigField
+		ConfigValues  map[string]interface{}
+		AllTypes      []string
+		SchemaPanels  template.HTML // pre-rendered panels for all types (new form only)
 	}{
 		PageData:     PageData{Active: "actions", CSRFToken: getCSRFToken(r)},
 		IsEdit:       isEdit,
@@ -393,7 +407,6 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 		data.ActionType = action.Type
 		data.Title = "Edit Action: " + action.Name
 
-		// Mask secrets and parse config for form values
 		masked := maskSecrets(action.Type, action.ConfigJSON, s.app.registry)
 		json.Unmarshal(masked, &data.ConfigValues)
 
@@ -403,15 +416,43 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data.Title = "Add Action"
 		data.ActionType = actionType
-		if actionType != "" {
-			if executor, err := s.app.registry.Get(actionType); err == nil {
-				data.Schema = executor.ConfigSchema()
-				json.Unmarshal(executor.DefaultConfig(), &data.ConfigValues)
-			}
-		}
+		data.SchemaPanels = s.renderAllActionSchemas(actionType)
 	}
 
 	s.templates.renderPage(w, "action_form", data)
+}
+
+// renderAllActionSchemas pre-renders a panel per registered action type,
+// wrapped in <div data-action-type="X" style="display:none"> so the new
+// form's type dropdown can toggle them via a local script. Eliminates the
+// HTMX round-trip to /ui/action-schema (which 522s behind reverse proxies).
+func (s *Server) renderAllActionSchemas(selected string) template.HTML {
+	tmpl, ok := s.templates.partials["config-fields"]
+	if !ok {
+		return template.HTML("")
+	}
+	var buf strings.Builder
+	placeholderStyle := "display:none"
+	if selected == "" {
+		placeholderStyle = ""
+	}
+	fmt.Fprintf(&buf, `<div data-action-type="" style=%q><p class="text-muted">Select an action type.</p></div>`,
+		placeholderStyle)
+	for _, t := range s.app.registry.Types() {
+		executor, err := s.app.registry.Get(t)
+		if err != nil {
+			continue
+		}
+		style := "display:none"
+		if t == selected {
+			style = ""
+		}
+		var sub strings.Builder
+		_ = tmpl.Execute(&sub, executor.ConfigSchema())
+		fmt.Fprintf(&buf, `<div data-action-type=%q style=%q>%s</div>`,
+			t, style, sub.String())
+	}
+	return template.HTML(buf.String())
 }
 
 func (s *Server) handleHistoryPage(w http.ResponseWriter, r *http.Request) {

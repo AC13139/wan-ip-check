@@ -18,11 +18,7 @@
         <input type="text" class="form-input mono" value="{{.ActionType}}" disabled>
         <input type="hidden" name="type" value="{{.ActionType}}">
         {{else}}
-        <select name="type" class="form-select" required
-                hx-get="/ui/action-schema"
-                hx-target="#config-fields"
-                hx-swap="innerHTML"
-                hx-include="[name='type']">
+        <select name="type" class="form-select" required id="action-type-select">
           <option value="">Select type...</option>
           {{range .AllTypes}}
           <option value="{{.}}" {{if eq . $.ActionType}}selected{{end}}>{{.}}</option>
@@ -46,6 +42,7 @@
   <div class="card mb-lg">
     <h3 class="section-title">Configuration</h3>
     <div id="config-fields">
+      {{if .IsEdit}}
       {{range .Schema}}
       <div class="form-group">
         <label class="form-label">{{.Label}}{{if .Required}} *{{end}}</label>
@@ -80,11 +77,31 @@
         {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
       </div>
       {{end}}
-      {{if not .Schema}}
-      <p class="text-muted">Select an action type to see configuration fields.</p>
+      {{else}}
+      {{.SchemaPanels}}
       {{end}}
     </div>
   </div>
+  {{if not .IsEdit}}
+  <script>
+    (function () {
+      var sel = document.getElementById('action-type-select');
+      var wrap = document.getElementById('config-fields');
+      if (!sel || !wrap) return;
+      function apply() {
+        wrap.querySelectorAll('[data-action-type]').forEach(function (el) {
+          var active = el.getAttribute('data-action-type') === sel.value;
+          el.style.display = active ? '' : 'none';
+          el.querySelectorAll('input, select, textarea').forEach(function (inp) {
+            inp.disabled = !active;
+          });
+        });
+      }
+      sel.addEventListener('change', apply);
+      apply();
+    })();
+  </script>
+  {{end}}
 
   {{if .IsEdit}}
   <input type="hidden" name="action_id" value="{{.Action.ID}}">

@@ -81,11 +81,7 @@
 
     <div class="form-group">
       <label class="form-label">Routing Method</label>
-      <select name="egress_mode" class="form-select"
-              hx-get="/ui/egress-fields"
-              hx-target="#egress-fields"
-              hx-swap="innerHTML"
-              hx-include="[name='egress_mode']">
+      <select name="egress_mode" class="form-select" id="egress-mode-select">
         <option value="default" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "default")}}selected{{end}}>Default route</option>
         <option value="gateway" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "gateway")}}selected{{end}}>Specific gateway (requires NET_ADMIN)</option>
         <option value="proxy" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "proxy")}}selected{{end}}>HTTP proxy</option>
@@ -94,6 +90,25 @@
     <div id="egress-fields">
       {{.EgressFields}}
     </div>
+    <script>
+      (function () {
+        var sel = document.getElementById('egress-mode-select');
+        var wrap = document.getElementById('egress-fields');
+        if (!sel || !wrap) return;
+        function apply() {
+          wrap.querySelectorAll('[data-egress-mode]').forEach(function (el) {
+            var active = el.getAttribute('data-egress-mode') === sel.value;
+            el.style.display = active ? '' : 'none';
+            // Disable inputs in hidden panels so they do not submit or trigger required-validation.
+            el.querySelectorAll('input, select, textarea').forEach(function (inp) {
+              inp.disabled = !active;
+            });
+          });
+        }
+        sel.addEventListener('change', apply);
+        apply();
+      })();
+    </script>
 
     <div class="test-route-wrap">
       <button type="button" class="btn btn-secondary btn-sm"
