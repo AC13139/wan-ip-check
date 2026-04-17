@@ -269,6 +269,7 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 		AllActions     []Action
 		LinkedIDs      map[int64]bool
 		LinkedTriggers map[int64]string // action ID -> trigger_on
+		EgressFields   template.HTML    // pre-rendered egress fields
 	}{
 		PageData:       PageData{Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
 		IsEdit:         isEdit,
@@ -300,8 +301,39 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 
 	actions, _ := s.app.db.ListActions()
 	data.AllActions = actions
+	data.EgressFields = s.renderEgressFields(data.WANInterface.Config.Egress)
 
 	s.templates.renderPage(w, "wan_interface_form", data)
+}
+
+// renderEgressFields renders the egress-fields partial to a string for inline
+// embedding. This lets the form be usable immediately on first page load
+// without a second HTMX round-trip (which was failing behind some reverse
+// proxies).
+func (s *Server) renderEgressFields(egress EgressConfig) template.HTML {
+	ifaces, _ := listNetworkInterfaces()
+	mode := egress.Mode
+	if mode == "" {
+		mode = "default"
+	}
+	var buf strings.Builder
+	tmpl, ok := s.templates.partials["egress-fields"]
+	if !ok {
+		return template.HTML("")
+	}
+	_ = tmpl.Lookup("egress-fields").Execute(&buf, struct {
+		Mode          string
+		Interfaces    []NetworkInterface
+		InterfaceName string
+		Gateway       string
+		ProxyURL      string
+	}{
+		Mode: mode, Interfaces: ifaces,
+		InterfaceName: egress.InterfaceName,
+		Gateway:       egress.Gateway,
+		ProxyURL:      egress.ProxyURL,
+	})
+	return template.HTML(buf.String())
 }
 
 func (s *Server) handleActionsPage(w http.ResponseWriter, r *http.Request) {

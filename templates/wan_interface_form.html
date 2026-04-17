@@ -90,10 +90,8 @@
         <option value="proxy" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "proxy")}}selected{{end}}>HTTP proxy</option>
       </select>
     </div>
-    <div id="egress-fields"
-         hx-get="/ui/egress-fields?egress_mode={{if .IsEdit}}{{.WANInterface.Config.Egress.Mode}}{{else}}default{{end}}&interface_name={{if .IsEdit}}{{.WANInterface.Config.Egress.InterfaceName}}{{end}}&gateway={{if .IsEdit}}{{.WANInterface.Config.Egress.Gateway}}{{end}}&proxy_url={{if .IsEdit}}{{.WANInterface.Config.Egress.ProxyURL}}{{end}}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
+    <div id="egress-fields">
+      {{.EgressFields}}
     </div>
 
     <div class="test-route-wrap">
