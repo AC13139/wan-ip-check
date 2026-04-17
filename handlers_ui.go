@@ -512,43 +512,177 @@ func (s *Server) handleUIToggleAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
+// handleUIExecuteAction runs the saved action once per linked WAN interface,
+// using each WAN's current last_observed_ip. Each run is logged to
+// action_runs. Manual executions never set NeedsRetry — retries are a
+// property of automated scheduled runs only. Returns an HTMX partial listing
+// per-WAN outcomes.
+func (s *Server) handleUIExecuteAction(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	action, err := s.app.db.GetAction(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-
+	if !action.Enabled {
+		fmt.Fprintf(w, `<span class="badge badge-error">action disabled</span>`)
+		return
+	}
 	executor, err := s.app.registry.Get(action.Type)
 	if err != nil {
 		fmt.Fprintf(w, `<span class="badge badge-error">unknown type</span>`)
 		return
 	}
-
-	// CF actions: validate only. Discord/webhook: execute test.
-	if action.Type == "cloudflare_dns" || action.Type == "cloudflare_gateway" {
-		if err := executor.ValidateConfig(action.ConfigJSON); err != nil {
-			fmt.Fprintf(w, `<span class="badge badge-error">%s</span>`, template.HTMLEscapeString(err.Error()))
-		} else {
-			fmt.Fprintf(w, `<span class="badge badge-success">config valid</span>`)
-		}
+	links, err := s.app.db.GetActionLinkedWANInterfacesWithState(id)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">load error</span>`)
+		return
+	}
+	if len(links) == 0 {
+		fmt.Fprintf(w, `<span class="badge badge-muted">no linked WAN</span>`)
+		return
+	}
+	decrypted, err := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">decrypt error</span>`)
 		return
 	}
 
-	decrypted, _ := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
+	type result struct {
+		Name   string
+		OK     bool
+		Detail string
+	}
+	results := make([]result, 0, len(links))
+	for _, link := range links {
+		if link.LastObservedIP == "" {
+			results = append(results, result{Name: link.Name, OK: false, Detail: "no IP yet"})
+			s.app.db.LogActionRun(&ActionRun{
+				WANInterfaceID: link.WANInterfaceID, ActionID: id,
+				EventType: "ip_changed", Status: "failed",
+				NeedsRetry: false, ErrorMsg: "manual execute skipped: no observed IP",
+			})
+			continue
+		}
+		execErr := s.safeExecute(r.Context(), executor, IPEvent{
+			WANInterfaceID:   link.WANInterfaceID,
+			WANInterfaceName: link.Name,
+			EventType:        "ip_changed",
+			OldIP:            link.LastObservedIP,
+			NewIP:            link.LastObservedIP,
+			Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		}, decrypted, 15*time.Second)
+		status := "success"
+		errMsg := ""
+		if execErr != nil {
+			status = "failed"
+			errMsg = execErr.Error()
+		}
+		s.app.db.LogActionRun(&ActionRun{
+			WANInterfaceID: link.WANInterfaceID, ActionID: id,
+			EventType: "ip_changed", OldIP: link.LastObservedIP, NewIP: link.LastObservedIP,
+			// NeedsRetry is always false for manual execute — the retry
+			// queue is for automated scheduled runs only.
+			Status: status, NeedsRetry: false, ErrorMsg: errMsg,
+		})
+		results = append(results, result{
+			Name: link.Name, OK: execErr == nil,
+			Detail: link.LastObservedIP,
+		})
+	}
+
+	// Render inline per-WAN result badges.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	for i, rr := range results {
+		if i > 0 {
+			fmt.Fprint(w, " ")
+		}
+		class := "badge-success"
+		icon := "✓"
+		if !rr.OK {
+			class = "badge-error"
+			icon = "✗"
+		}
+		fmt.Fprintf(w, `<span class="badge %s">%s %s (%s)</span>`,
+			class, icon,
+			template.HTMLEscapeString(rr.Name),
+			template.HTMLEscapeString(rr.Detail))
+	}
+}
+
+// handleUITestAction runs a dry-run with synthetic IPs against an unsaved
+// (in-progress) action config submitted via the edit form. Does NOT write
+// to action_runs. Returns a single inline badge.
+func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid form</span>`)
+		return
+	}
+	actionType := r.FormValue("type")
+	executor, err := s.app.registry.Get(actionType)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">unknown type</span>`)
+		return
+	}
+
+	// Build config JSON from form fields (mask-merge secrets against existing
+	// record if an action_id is provided so users editing existing actions
+	// can test without re-entering secrets).
+	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	if existingIDStr := r.FormValue("action_id"); existingIDStr != "" {
+		if existingID, err := strconv.ParseInt(existingIDStr, 10, 64); err == nil {
+			if existing, err := s.app.db.GetAction(existingID); err == nil {
+				configJSON = mergeSecretFields(configJSON, existing.ConfigJSON, executor.SecretFields())
+			}
+		}
+	}
+
+	if err := executor.ValidateConfig(configJSON); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid config: %s</span>`,
+			template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	encrypted, err := EncryptActionSecrets(configJSON, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">encrypt error</span>`)
+		return
+	}
+	decrypted, err := DecryptActionSecrets(encrypted, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">decrypt error</span>`)
+		return
+	}
+
 	event := IPEvent{
 		WANInterfaceName: "Test",
 		EventType:        "ip_changed",
-		OldIP:            "203.0.113.0",
-		NewIP:            "203.0.113.1",
+		OldIP:            "198.51.100.1",
+		NewIP:            "203.0.113.42",
 		Timestamp:        time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := executor.Execute(r.Context(), event, decrypted); err != nil {
-		fmt.Fprintf(w, `<span class="badge badge-error">%s</span>`, template.HTMLEscapeString(err.Error()))
-	} else {
-		fmt.Fprintf(w, `<span class="badge badge-success">sent</span>`)
+	if err := s.safeExecute(r.Context(), executor, event, decrypted, 15*time.Second); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">✗ %s</span>`,
+			template.HTMLEscapeString(err.Error()))
+		return
 	}
+	fmt.Fprintf(w, `<span class="badge badge-success">✓ test sent with synthetic IP 203.0.113.42</span>`)
+}
+
+// safeExecute wraps executor.Execute with a timeout context and panic
+// containment so a buggy executor cannot take down the request goroutine.
+func (s *Server) safeExecute(ctx context.Context, executor ActionExecutor,
+	event IPEvent, config json.RawMessage, timeout time.Duration) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("executor panic: %v", rec)
+			s.logger.Error("executor panic",
+				"action_type", event.EventType, "panic", rec)
+		}
+	}()
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return executor.Execute(runCtx, event, config)
 }
 
 func (s *Server) handleUIDeleteWANInterface(w http.ResponseWriter, r *http.Request) {

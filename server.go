@@ -122,7 +122,8 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /ui/wan-interfaces/{id}/check", s.handleUIManualCheck)
 	mux.HandleFunc("POST /ui/wan-interfaces/{id}/toggle", s.handleUIToggleWANInterface)
 	mux.HandleFunc("POST /ui/actions/{id}/toggle", s.handleUIToggleAction)
-	mux.HandleFunc("POST /ui/actions/{id}/test", s.handleUITestAction)
+	mux.HandleFunc("POST /ui/actions/{id}/execute", s.handleUIExecuteAction)
+	mux.HandleFunc("POST /ui/action-test", s.handleUITestAction)
 	mux.HandleFunc("DELETE /ui/wan-interfaces/{id}", s.handleUIDeleteWANInterface)
 	mux.HandleFunc("DELETE /ui/actions/{id}", s.handleUIDeleteAction)
 

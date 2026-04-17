@@ -683,6 +683,43 @@ func (db *DB) GetActionLinkedWANInterfaceCount(actionID int64) (int, error) {
 	return count, err
 }
 
+// LinkedWANInterface captures the subset of WAN interface state Execute
+// needs to fire an action against each link.
+type LinkedWANInterface struct {
+	WANInterfaceID int64
+	Name           string
+	LastObservedIP string
+}
+
+// GetActionLinkedWANInterfacesWithState returns the enabled WAN interfaces
+// linked to an action, including each WAN's last observed IP. Used by the
+// Actions-list Execute button to fan out against current live state.
+func (db *DB) GetActionLinkedWANInterfacesWithState(actionID int64) ([]LinkedWANInterface, error) {
+	rows, err := db.conn.Query(
+		`SELECT wi.id, wi.name, COALESCE(s.last_observed_ip, '')
+		 FROM wan_interface_actions wia
+		 JOIN wan_interfaces wi ON wi.id = wia.wan_interface_id
+		 LEFT JOIN wan_interface_state s ON s.wan_interface_id = wi.id
+		 WHERE wia.action_id = ? AND wia.enabled = 1 AND wi.enabled = 1
+		 ORDER BY wi.name`,
+		actionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LinkedWANInterface
+	for rows.Next() {
+		var w LinkedWANInterface
+		if err := rows.Scan(&w.WANInterfaceID, &w.Name, &w.LastObservedIP); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
 // GetActionLinkedWANInterfaces returns the names of WAN interfaces linked to an action.
 func (db *DB) GetActionLinkedWANInterfaces(actionID int64) ([]string, error) {
 	rows, err := db.conn.Query(
