@@ -48,8 +48,103 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) migrate() error {
-	_, err := db.conn.Exec(schema)
-	return err
+	if err := db.renameAlphaSchema(); err != nil {
+		return fmt.Errorf("renaming alpha schema: %w", err)
+	}
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+	return nil
+}
+
+// renameAlphaSchema migrates v2.0.0-alpha databases (tables: sources,
+// source_state, source_actions; columns: source_id) to the current beta
+// schema (wan_interfaces, wan_interface_state, wan_interface_actions;
+// wan_interface_id). Idempotent — safe to run on already-migrated DBs.
+func (db *DB) renameAlphaSchema() error {
+	tableExists := func(name string) (bool, error) {
+		var n string
+		err := db.conn.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+			name,
+		).Scan(&n)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	columnExists := func(table, column string) (bool, error) {
+		var n string
+		err := db.conn.QueryRow(
+			"SELECT name FROM pragma_table_info(?) WHERE name = ?",
+			table, column,
+		).Scan(&n)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return err == nil, err
+	}
+
+	hasSources, err := tableExists("sources")
+	if err != nil {
+		return err
+	}
+	hasSourceState, err := tableExists("source_state")
+	if err != nil {
+		return err
+	}
+	hasSourceActions, err := tableExists("source_actions")
+	if err != nil {
+		return err
+	}
+	actionRunsHasSourceID, err := columnExists("action_runs", "source_id")
+	if err != nil {
+		return err
+	}
+
+	if !hasSources && !hasSourceState && !hasSourceActions && !actionRunsHasSourceID {
+		return nil
+	}
+
+	db.logger.Info("migrating alpha schema to wan_interface tables",
+		"sources", hasSources, "source_state", hasSourceState,
+		"source_actions", hasSourceActions, "action_runs.source_id", actionRunsHasSourceID)
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var stmts []string
+	if hasSources {
+		stmts = append(stmts, "ALTER TABLE sources RENAME TO wan_interfaces")
+	}
+	if hasSourceState {
+		stmts = append(stmts,
+			"ALTER TABLE source_state RENAME TO wan_interface_state",
+			"ALTER TABLE wan_interface_state RENAME COLUMN source_id TO wan_interface_id",
+		)
+	}
+	if hasSourceActions {
+		stmts = append(stmts,
+			"ALTER TABLE source_actions RENAME TO wan_interface_actions",
+			"ALTER TABLE wan_interface_actions RENAME COLUMN source_id TO wan_interface_id",
+		)
+	}
+	if actionRunsHasSourceID {
+		stmts = append(stmts,
+			"ALTER TABLE action_runs RENAME COLUMN source_id TO wan_interface_id",
+			"DROP INDEX IF EXISTS idx_action_runs_source",
+		)
+	}
+
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("%q: %w", s, err)
+		}
+	}
+	return tx.Commit()
 }
 
 const schema = `
