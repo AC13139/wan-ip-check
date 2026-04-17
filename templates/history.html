@@ -21,8 +21,8 @@
             hx-include="#filter-wi, #filter-event, #filter-status"
             name="event">
       <option value="">All Events</option>
-      <option value="ip_changed">IP Changed</option>
-      <option value="ip_unchanged_daily">Daily Summary</option>
+      <option value="ip_changed">Action (IP Changed)</option>
+      <option value="ip_unchanged_daily">Action (Daily Summary)</option>
     </select>
   </div>
   <div class="form-group" style="margin-bottom:0">
@@ -44,8 +44,9 @@
     <thead>
       <tr>
         <th>Time</th>
+        <th>Kind</th>
         <th>WAN Interface</th>
-        <th>Event</th>
+        <th>Event / Trigger</th>
         <th>Old IP</th>
         <th>New IP</th>
         <th>Action</th>
@@ -68,32 +69,39 @@
           hx-include="#filter-wi, #filter-event, #filter-status"
           hx-vals='{"offset": "{{.Limit}}", "limit": "50"}'
           hx-on::after-request="this.setAttribute('hx-vals', JSON.stringify({offset: String(parseInt(JSON.parse(this.getAttribute('hx-vals')).offset) + 50), limit: '50'}))">Load More</button>
-  <div class="text-sm text-muted mt-lg">Showing {{len .Runs}} of {{.Total}} events</div>
+  <div class="text-sm text-muted mt-lg">Showing {{len .Entries}} of {{.Total}} events</div>
 </div>
 {{end}}
 {{end}}
 
 {{define "history-rows"}}
-{{range .Runs}}
+{{range .Entries}}
 <tr>
   <td class="mono-sm">{{.ExecutedAt.Format "2006-01-02 15:04:05"}}</td>
+  <td>
+    {{if eq .Kind "check"}}<span class="badge badge-muted">check</span>
+    {{else}}<span class="badge badge-info">action</span>{{end}}
+  </td>
   <td>{{.WANInterfaceName}}</td>
   <td>
-    {{if eq .EventType "ip_changed"}}<span class="badge badge-info">ip_changed</span>
-    {{else}}<span class="badge badge-muted">daily_summary</span>{{end}}
+    {{if eq .Kind "check"}}<span class="mono-sm">{{.Event}}</span>
+    {{else if eq .Event "ip_changed"}}<span class="badge badge-info">ip_changed</span>
+    {{else}}<span class="badge badge-muted">{{.Event}}</span>{{end}}
   </td>
   <td class="mono">{{if .OldIP}}{{.OldIP}}{{else}}—{{end}}</td>
   <td class="mono">{{if .NewIP}}{{.NewIP}}{{else}}—{{end}}</td>
-  <td>{{.ActionName}}</td>
+  <td>{{if .ActionName}}{{.ActionName}}{{else}}<span class="text-muted">—</span>{{end}}</td>
   <td>
     {{if eq .Status "success"}}<span class="badge badge-success">success</span>
+    {{else if eq .Status "ok"}}<span class="badge badge-success">ok</span>
+    {{else if eq .Status "changed"}}<span class="badge badge-info">changed</span>
     {{else if eq .Status "failed"}}<span class="badge badge-error">failed</span>
     {{else}}<span class="badge badge-muted">{{.Status}}</span>{{end}}
   </td>
   <td class="text-sm text-error">{{if .ErrorMsg}}{{.ErrorMsg}}{{end}}</td>
 </tr>
 {{end}}
-{{if not .Runs}}
-<tr><td colspan="8" class="text-muted" style="text-align:center;padding:24px">No events yet.</td></tr>
+{{if not .Entries}}
+<tr><td colspan="9" class="text-muted" style="text-align:center;padding:24px">No events yet.</td></tr>
 {{end}}
 {{end}}

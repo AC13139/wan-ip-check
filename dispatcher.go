@@ -169,7 +169,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 
 	for _, wi := range wanInterfaces {
 		if wi.Enabled {
-			d.checkWANInterface(ctx, wi.ID)
+			d.checkWANInterface(ctx, wi.ID, "scheduled")
 		}
 	}
 
@@ -267,7 +267,7 @@ func (d *Dispatcher) startCron(ctx context.Context) error {
 		// Wrap schedule with timezone
 		schedule := w.Schedule
 		entryID, err := d.cron.AddFunc("CRON_TZ="+loc.String()+" "+schedule, func() {
-			d.checkWANInterface(ctx, w.ID)
+			d.checkWANInterface(ctx, w.ID, "scheduled")
 		})
 		if err != nil {
 			d.logger.Error("invalid schedule for WAN interface", "wan_interface_id", w.ID, "name", w.Name, "schedule", w.Schedule, "error", err)
@@ -282,12 +282,18 @@ func (d *Dispatcher) startCron(ctx context.Context) error {
 	return nil
 }
 
-// checkWANInterface runs the IP detection + action dispatch cycle for a single WAN interface.
-// Per-WAN-interface mutex prevents concurrent execution from cron + manual API calls.
-func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64) {
+// checkWANInterface runs the IP detection + action dispatch cycle for a
+// single WAN interface. trigger is "scheduled" or "manual". Every check
+// outcome is logged to wan_interface_checks. Per-WAN-interface mutex
+// prevents concurrent execution from cron + manual API calls.
+func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64, trigger string) {
 	mu := d.getWANInterfaceLock(wanInterfaceID)
 	mu.Lock()
 	defer mu.Unlock()
+
+	if trigger == "" {
+		trigger = "scheduled"
+	}
 
 	wi, err := d.db.GetWANInterface(wanInterfaceID)
 	if err != nil {
@@ -301,7 +307,21 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 		return
 	}
 
-	logger := d.logger.With("wan_interface_id", wanInterfaceID, "wan_interface", wi.Name)
+	logger := d.logger.With("wan_interface_id", wanInterfaceID, "wan_interface", wi.Name, "trigger", trigger)
+	previousIP := state.LastObservedIP
+
+	logCheck := func(status, observedIP, errMsg string) {
+		if err := d.db.LogWANInterfaceCheck(&WANInterfaceCheck{
+			WANInterfaceID: wanInterfaceID,
+			Trigger:        trigger,
+			Status:         status,
+			ObservedIP:     observedIP,
+			PreviousIP:     previousIP,
+			ErrorMsg:       errMsg,
+		}); err != nil {
+			logger.Warn("failed to log check", "error", err)
+		}
+	}
 
 	// Migrate old config and set up gateway PBR if needed
 	wi.Config.MigrateEgress()
@@ -313,6 +333,7 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 			state.LastError = "PBR setup failed: " + err.Error()
 			state.LastCheckAt = time.Now()
 			d.db.UpdateWANInterfaceState(state)
+			logCheck("failed", "", state.LastError)
 			return
 		}
 	}
@@ -332,6 +353,7 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Error("IP detection failed", "error", err, "consecutive_failures", state.ConsecutiveFailures)
+		logCheck("failed", "", state.LastError)
 		return
 	}
 
@@ -351,6 +373,7 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Info("first run, IP saved", "ip", newIP)
+		logCheck("ok", newIP, "")
 		return
 	}
 
@@ -366,6 +389,7 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Info("IP changed", "old", oldIP, "new", newIP)
+		logCheck("changed", newIP, "")
 
 		event := IPEvent{
 			WANInterfaceID:   wanInterfaceID,
@@ -383,6 +407,7 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 			logger.Error("failed to persist WAN interface state", "error", err)
 		}
 		logger.Debug("IP unchanged", "ip", newIP)
+		logCheck("ok", newIP, "")
 
 		d.checkDailySummary(ctx, wi, state, newIP, logger)
 	}

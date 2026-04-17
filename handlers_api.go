@@ -231,7 +231,7 @@ func (s *Server) handleManualCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run check synchronously
-	s.dispatcher.checkWANInterface(r.Context(), id)
+	s.dispatcher.checkWANInterface(r.Context(), id, "manual")
 
 	// Return updated state
 	state, _ := s.app.db.GetWANInterfaceState(id)

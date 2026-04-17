@@ -210,7 +210,46 @@ CREATE TABLE IF NOT EXISTS action_runs (
 
 CREATE INDEX IF NOT EXISTS idx_action_runs_wan_interface ON action_runs(wan_interface_id, executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_runs_needs_retry ON action_runs(needs_retry) WHERE needs_retry = 1;
+
+CREATE TABLE IF NOT EXISTS wan_interface_checks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    wan_interface_id  INTEGER NOT NULL REFERENCES wan_interfaces(id) ON DELETE CASCADE,
+    trigger           TEXT NOT NULL,              -- 'scheduled' or 'manual'
+    status            TEXT NOT NULL,              -- 'ok', 'changed', 'failed'
+    observed_ip       TEXT,
+    previous_ip       TEXT,
+    error_msg         TEXT,
+    executed_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wan_interface_checks_wi ON wan_interface_checks(wan_interface_id, executed_at DESC);
 `
+
+// --- WAN Interface Checks (audit log of every IP probe) ---
+
+// WANInterfaceCheck records a single IP-probe outcome. Unlike ActionRun
+// (which logs action executions triggered by an event), this records every
+// check — scheduled or manual — including ones where the IP did not change.
+type WANInterfaceCheck struct {
+	ID             int64
+	WANInterfaceID int64
+	Trigger        string // "scheduled" | "manual"
+	Status         string // "ok" | "changed" | "failed"
+	ObservedIP     string
+	PreviousIP     string
+	ErrorMsg       string
+	ExecutedAt     time.Time
+}
+
+func (db *DB) LogWANInterfaceCheck(c *WANInterfaceCheck) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO wan_interface_checks
+		 (wan_interface_id, trigger, status, observed_ip, previous_ip, error_msg)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		c.WANInterfaceID, c.Trigger, c.Status,
+		nullStr(c.ObservedIP), nullStr(c.PreviousIP), nullStr(c.ErrorMsg),
+	)
+	return err
+}
 
 // --- Settings ---
 
@@ -661,6 +700,136 @@ func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int,
 		runs = append(runs, r)
 	}
 	return runs, total, rows.Err()
+}
+
+// HistoryEntry is the merged view of a check or an action run, used by the
+// History page to present a single chronological timeline.
+type HistoryEntry struct {
+	Kind             string // "check" or "action"
+	ID               int64
+	WANInterfaceID   int64
+	WANInterfaceName string
+	Event            string // check trigger ("manual"/"scheduled") or action event_type
+	ActionName       string // empty for checks
+	OldIP            string
+	NewIP            string
+	Status           string
+	ErrorMsg         string
+	ExecutedAt       time.Time
+}
+
+// GetMergedHistory returns the chronologically merged union of check rows
+// and action-run rows matching the filter. Filters on WAN interface and
+// status apply to both sources; event filter applies to action_runs only
+// (checks have no event type, they are always the full probe outcome).
+func (db *DB) GetMergedHistory(filter HistoryFilter) ([]HistoryEntry, int, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Build WHERE clauses independently for each source so we can UNION.
+	checksWhere := "1=1"
+	actionsWhere := "1=1"
+	checksArgs := []interface{}{}
+	actionsArgs := []interface{}{}
+
+	if filter.WANInterfaceID > 0 {
+		checksWhere += " AND wc.wan_interface_id = ?"
+		actionsWhere += " AND ar.wan_interface_id = ?"
+		checksArgs = append(checksArgs, filter.WANInterfaceID)
+		actionsArgs = append(actionsArgs, filter.WANInterfaceID)
+	}
+	if filter.Status != "" {
+		// Map UI status "success" to concrete values per source.
+		if filter.Status == "success" {
+			checksWhere += " AND wc.status IN ('ok','changed')"
+			actionsWhere += " AND ar.status = 'success'"
+		} else {
+			checksWhere += " AND wc.status = ?"
+			actionsWhere += " AND ar.status = ?"
+			checksArgs = append(checksArgs, filter.Status)
+			actionsArgs = append(actionsArgs, filter.Status)
+		}
+	}
+	if filter.EventType != "" {
+		// Event filter only applies to action_runs — checks never match.
+		actionsWhere += " AND ar.event_type = ?"
+		actionsArgs = append(actionsArgs, filter.EventType)
+		// Exclude checks entirely when filtering by event_type.
+		checksWhere += " AND 0 = 1"
+	}
+
+	// Count total (union).
+	countQuery := fmt.Sprintf(`
+		SELECT
+		  (SELECT COUNT(*) FROM wan_interface_checks wc WHERE %s)
+		+ (SELECT COUNT(*) FROM action_runs ar WHERE %s)`,
+		checksWhere, actionsWhere)
+	var total int
+	countArgs := append(append([]interface{}{}, checksArgs...), actionsArgs...)
+	if err := db.conn.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting history: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT kind, id, wan_interface_id, wan_interface_name, event, action_name,
+		       old_ip, new_ip, status, error_msg, executed_at
+		FROM (
+		  SELECT 'check' AS kind, wc.id AS id, wc.wan_interface_id,
+		         COALESCE(wi.name, '?') AS wan_interface_name,
+		         wc.trigger AS event,
+		         '' AS action_name,
+		         wc.previous_ip AS old_ip,
+		         wc.observed_ip AS new_ip,
+		         wc.status AS status,
+		         wc.error_msg AS error_msg,
+		         wc.executed_at AS executed_at
+		  FROM wan_interface_checks wc
+		  LEFT JOIN wan_interfaces wi ON wi.id = wc.wan_interface_id
+		  WHERE %s
+		  UNION ALL
+		  SELECT 'action' AS kind, ar.id AS id, ar.wan_interface_id,
+		         COALESCE(wi.name, '?') AS wan_interface_name,
+		         ar.event_type AS event,
+		         COALESCE(a.name, '?') AS action_name,
+		         ar.old_ip, ar.new_ip,
+		         ar.status,
+		         ar.error_msg,
+		         ar.executed_at
+		  FROM action_runs ar
+		  LEFT JOIN wan_interfaces wi ON wi.id = ar.wan_interface_id
+		  LEFT JOIN actions a ON a.id = ar.action_id
+		  WHERE %s
+		)
+		ORDER BY executed_at DESC
+		LIMIT ? OFFSET ?`, checksWhere, actionsWhere)
+	pageArgs := append(append([]interface{}{}, checksArgs...), actionsArgs...)
+	pageArgs = append(pageArgs, limit, offset)
+	rows, err := db.conn.Query(query, pageArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying history: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []HistoryEntry
+	for rows.Next() {
+		var e HistoryEntry
+		var oldIP, newIP, errMsg sql.NullString
+		if err := rows.Scan(&e.Kind, &e.ID, &e.WANInterfaceID, &e.WANInterfaceName,
+			&e.Event, &e.ActionName, &oldIP, &newIP, &e.Status, &errMsg, &e.ExecutedAt); err != nil {
+			return nil, 0, fmt.Errorf("scanning history: %w", err)
+		}
+		e.OldIP = oldIP.String
+		e.NewIP = newIP.String
+		e.ErrorMsg = errMsg.String
+		entries = append(entries, e)
+	}
+	return entries, total, rows.Err()
 }
 
 // GetWANInterfaceLinkedActionCount returns the count of enabled actions linked to a WAN interface.
