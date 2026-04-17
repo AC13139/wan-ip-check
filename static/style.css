@@ -192,8 +192,7 @@ a:hover {
   border-color: var(--border-prominent);
 }
 .card.disabled {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.55;
 }
 .card.accent {
   border-color: var(--border-accent);
@@ -729,6 +728,15 @@ tbody tr:hover {
 }
 .btn:disabled[title] {
   cursor: help;
+}
+
+/* ========== WAN Interface card meta row ========== */
+.wi-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
 }
 
 /* ========== Action edit: Test button + inline result ========== */

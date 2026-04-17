@@ -1,7 +1,7 @@
 {{define "content"}}
-<div class="card-grid">
+<div class="card-grid" role="list">
   {{range .Actions}}
-  <div class="card{{if not .Action.Enabled}} disabled{{end}}" id="action-card-{{.Action.ID}}">
+  <div class="card{{if not .Action.Enabled}} disabled{{end}}" id="action-card-{{.Action.ID}}" role="listitem">
     <div class="card-header">
       <div>
         <span class="card-title">{{.Action.Name}}</span>
@@ -42,7 +42,7 @@
     </div>
   </div>
   {{end}}
-  <a class="card card-add" href="/actions/new" aria-label="Add new action">
+  <a class="card card-add" href="/actions/new" role="listitem" aria-label="Add new action">
     <span class="card-add-plus">+</span>
     <span class="card-add-label">Add action</span>
   </a>

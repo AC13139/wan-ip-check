@@ -533,8 +533,8 @@ func (s *Server) handleUIToggleWANInterface(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/wan-interfaces")
-	w.WriteHeader(http.StatusOK)
+	display := s.buildWANInterfaceDisplay(*wi)
+	s.templates.renderPartial(w, "wan-interface-card", display)
 }
 
 func (s *Server) handleUIToggleAction(w http.ResponseWriter, r *http.Request) {
