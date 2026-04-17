@@ -597,9 +597,9 @@ func (s *Server) handleUITestRoute(w http.ResponseWriter, r *http.Request) {
 		Egress:      egress,
 	}
 
-	// Gateway mode requires PBR setup. To avoid racing with scheduled checks
-	// that manage PBR for the same tuple, we check whether the tuple is owned
-	// by a saved WAN interface. If so, reuse its rule (no install, no cleanup).
+	// Gateway mode requires fwmark-based PBR setup. To avoid racing with
+	// scheduled checks that manage PBR for the same tuple, we check whether
+	// the tuple is owned by an enabled saved WAN. If so, reuse its rule.
 	// If not, install ephemerally and remove after probing.
 	if cfg.Egress.Mode == "gateway" {
 		if !checkNetAdmin() {
@@ -608,26 +608,26 @@ func (s *Server) handleUITestRoute(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		sourceIP, err := resolveSourceIP(cfg.Egress.InterfaceName)
-		if err != nil {
+		if cfg.Egress.InterfaceName == "" || cfg.Egress.Gateway == "" {
 			s.templates.renderPartial(w, "test-route-result", testRouteResult{
-				OK: false, Message: "Could not resolve source IP for interface " + cfg.Egress.InterfaceName + ": " + err.Error(),
+				OK: false, Message: "Gateway mode requires both interface and gateway IP.",
 			})
 			return
 		}
-		cfg.Egress.SourceAddress = sourceIP
+		// Source IP resolved for display/state only; not used for PBR routing.
+		if src, err := resolveSourceIP(cfg.Egress.InterfaceName); err == nil {
+			cfg.Egress.SourceAddress = src
+		}
 
 		owned := s.tupleOwnedBySavedWAN(cfg.Egress.InterfaceName, cfg.Egress.Gateway)
-		if _, err := s.dispatcher.pbrManager.EnsureRoute(cfg.Egress.InterfaceName, sourceIP, cfg.Egress.Gateway); err != nil {
+		if _, _, err := s.dispatcher.pbrManager.EnsureRoute(cfg.Egress.InterfaceName, cfg.Egress.Gateway); err != nil {
 			s.templates.renderPartial(w, "test-route-result", testRouteResult{
 				OK: false, Message: "Failed to install PBR rule: " + err.Error(),
 			})
 			return
 		}
-		// Only clean up if the tuple is NOT owned by a saved WAN. If it is,
-		// cleanup would tear down a scheduled check's PBR mid-flight.
 		if !owned {
-			defer s.dispatcher.pbrManager.CleanupRoute(cfg.Egress.InterfaceName, sourceIP, cfg.Egress.Gateway)
+			defer s.dispatcher.pbrManager.CleanupRoute(cfg.Egress.InterfaceName, cfg.Egress.Gateway)
 		}
 	}
 

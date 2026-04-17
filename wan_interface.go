@@ -9,8 +9,14 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// soMark is Linux SO_MARK socket option value. Defined locally to avoid a
+// dependency on golang.org/x/sys. Setting this on a socket tags its egress
+// packets with an fwmark matched by `ip rule add fwmark ... lookup TBL`.
+const soMark = 36
 
 // WANInterface represents an IP detection WAN interface (input plugin).
 type WANInterface struct {
@@ -140,22 +146,17 @@ func buildEgressClient(egress EgressConfig, baseClient *http.Client, timeout tim
 		return getProxyClient(egress.ProxyURL, timeout)
 
 	case "gateway":
-		// Gateway mode: bind to the source IP (resolved from interface).
-		// PBR route setup is handled by the dispatcher before calling DetectIP.
-		sourceAddr := egress.SourceAddress
-		if sourceAddr == "" && egress.InterfaceName != "" {
-			resolved, err := resolveSourceIP(egress.InterfaceName)
-			if err != nil {
-				return nil, fmt.Errorf("resolving source IP for %s: %w", egress.InterfaceName, err)
-			}
-			sourceAddr = resolved
+		// Gateway mode: tag probe sockets with an fwmark matching the PBR rule
+		// installed by the dispatcher. The same deterministic derivation is
+		// used by both EnsureRoute and here so we don't need to plumb the
+		// mark through config.
+		if egress.InterfaceName == "" || egress.Gateway == "" {
+			return baseClient, nil
 		}
-		if sourceAddr != "" {
-			return getCachedClient("bind|"+sourceAddr+"|"+timeout.String(), func() *http.Client {
-				return buildClientWithLocalAddr(sourceAddr, timeout)
-			}), nil
-		}
-		return baseClient, nil
+		_, mark := DeriveMarkAndTable(egress.InterfaceName + "|" + egress.Gateway)
+		return getCachedClient(fmt.Sprintf("mark|%d|%s", mark, timeout), func() *http.Client {
+			return buildClientWithMark(mark, timeout)
+		}), nil
 
 	default: // "default" or ""
 		if egress.InterfaceName != "" || egress.SourceAddress != "" {
@@ -258,6 +259,33 @@ func getProxyClient(proxyURLStr string, timeout time.Duration) (*http.Client, er
 		}
 		return &http.Client{Transport: transport, Timeout: timeout}
 	}), nil
+}
+
+// buildClientWithMark creates an HTTP client that tags each outbound
+// connection with the given fwmark (via SO_MARK). Requires CAP_NET_ADMIN.
+// Traffic is then routed by the PBR rule `ip rule fwmark MARK lookup TBL`.
+func buildClientWithMark(mark uint32, timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		Control: func(network, address string, c syscall.RawConn) error {
+			var sockErr error
+			ctrlErr := c.Control(func(fd uintptr) {
+				sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soMark, int(mark))
+			})
+			if ctrlErr != nil {
+				return ctrlErr
+			}
+			return sockErr
+		},
+	}
+	transport := &http.Transport{
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{Transport: transport, Timeout: timeout}
 }
 
 // buildClientWithLocalAddr creates an HTTP client bound to a specific source IP.

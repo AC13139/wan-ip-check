@@ -13,90 +13,115 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// PBRManager manages per-WAN-interface policy-based routing tables.
-// Uses deterministic table mapping so tables survive process restarts.
+// PBRManager manages per-WAN-interface policy-based routing tables using
+// fwmark-based rules. Each (interface, gateway) tuple gets a deterministic
+// table + fwmark pair so that probe sockets tagged with SO_MARK route via
+// the correct gateway. fwmark is used instead of source-based matching so
+// multiple WANs sharing the same source IP (common in single-NIC
+// containers) can coexist with different gateways.
 type PBRManager struct {
-	mu     sync.Mutex
-	tables map[string]int
-	logger *slog.Logger
+	mu      sync.Mutex
+	entries map[string]pbrEntry
+	logger  *slog.Logger
+}
+
+type pbrEntry struct {
+	table int
+	mark  uint32
 }
 
 func NewPBRManager(logger *slog.Logger) *PBRManager {
-	return &PBRManager{tables: make(map[string]int), logger: logger}
+	return &PBRManager{entries: make(map[string]pbrEntry), logger: logger}
 }
 
-// deterministicTable returns a stable table number (100-65535) for a given key.
-// Large range minimizes collision risk across different WAN interface configs.
-func deterministicTable(key string) int {
+// DeriveMarkAndTable returns a stable (table, mark) pair for a given key.
+// Table range 100-65535; mark range 0x10001-0x1ff00 (above common user marks
+// to minimize collision with existing iptables rules).
+func DeriveMarkAndTable(key string) (table int, mark uint32) {
 	var hash uint32
 	for _, c := range key {
 		hash = hash*31 + uint32(c)
 	}
-	return 100 + int(hash%65435) // range 100-65535
+	table = 100 + int(hash%65435)
+	mark = 0x10001 + (hash % 0xfeff)
+	return
 }
 
-// EnsureRoute sets up PBR routing for the given interface/source/gateway combination.
-func (m *PBRManager) EnsureRoute(interfaceName, sourceAddr, gateway string) (int, error) {
-	key := fmt.Sprintf("%s|%s|%s", interfaceName, sourceAddr, gateway)
+// pbrKey canonicalises the lookup key so it is consistent across all callers.
+func pbrKey(interfaceName, gateway string) string {
+	return fmt.Sprintf("%s|%s", interfaceName, gateway)
+}
+
+// EnsureRoute sets up fwmark-based PBR for the given (interface, gateway).
+// Returns the table number and fwmark that probe sockets must use to route
+// through this gateway. Idempotent — safe to call repeatedly.
+func (m *PBRManager) EnsureRoute(interfaceName, gateway string) (int, uint32, error) {
+	key := pbrKey(interfaceName, gateway)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if tbl, ok := m.tables[key]; ok {
-		return tbl, nil
+	if e, ok := m.entries[key]; ok {
+		return e.table, e.mark, nil
 	}
 
-	tbl := deterministicTable(key)
+	tbl, mark := DeriveMarkAndTable(key)
 	tblStr := fmt.Sprintf("%d", tbl)
+	markStr := fmt.Sprintf("0x%x", mark)
 
-	m.logger.Info("PBR: setting up route", "interface", interfaceName, "source", sourceAddr, "gateway", gateway, "table", tbl)
+	m.logger.Info("PBR: setting up route",
+		"interface", interfaceName, "gateway", gateway, "table", tbl, "fwmark", markStr)
 
-	out, err := exec.Command("ip", "route", "replace", "default", "via", gateway, "dev", interfaceName, "table", tblStr).CombinedOutput()
+	out, err := exec.Command("ip", "route", "replace", "default",
+		"via", gateway, "dev", interfaceName, "table", tblStr).CombinedOutput()
 	if err != nil {
-		return 0, fmt.Errorf("ip route replace: %s: %w", strings.TrimSpace(string(out)), err)
+		return 0, 0, fmt.Errorf("ip route replace: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
-	out, err = exec.Command("ip", "rule", "add", "from", sourceAddr, "lookup", tblStr).CombinedOutput()
+	// Explicit /mask makes the exact-match semantics clear and avoids
+	// ambiguity if a future iproute2 change adjusts defaults.
+	out, err = exec.Command("ip", "rule", "add",
+		"fwmark", markStr+"/0xffffffff", "lookup", tblStr).CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "File exists") {
-		return 0, fmt.Errorf("ip rule add: %s: %w", strings.TrimSpace(string(out)), err)
+		return 0, 0, fmt.Errorf("ip rule add: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
-	m.tables[key] = tbl
-	return tbl, nil
+	m.entries[key] = pbrEntry{table: tbl, mark: mark}
+	return tbl, mark, nil
 }
 
-// CleanupRoute removes PBR routing for a given tuple.
-func (m *PBRManager) CleanupRoute(interfaceName, sourceAddr, gateway string) {
-	key := fmt.Sprintf("%s|%s|%s", interfaceName, sourceAddr, gateway)
+// CleanupRoute removes PBR routing for a given (interface, gateway).
+func (m *PBRManager) CleanupRoute(interfaceName, gateway string) {
+	key := pbrKey(interfaceName, gateway)
 	m.mu.Lock()
-	tbl, ok := m.tables[key]
+	e, ok := m.entries[key]
 	if ok {
-		delete(m.tables, key)
+		delete(m.entries, key)
 	}
 	m.mu.Unlock()
 
 	if !ok {
 		return
 	}
-	tblStr := fmt.Sprintf("%d", tbl)
-	exec.Command("ip", "rule", "del", "from", sourceAddr, "lookup", tblStr).Run()
+	tblStr := fmt.Sprintf("%d", e.table)
+	markStr := fmt.Sprintf("0x%x", e.mark)
+	exec.Command("ip", "rule", "del", "fwmark", markStr+"/0xffffffff", "lookup", tblStr).Run()
 	exec.Command("ip", "route", "del", "default", "table", tblStr).Run()
-	m.logger.Info("PBR: cleaned up route", "source", sourceAddr, "gateway", gateway, "table", tbl)
+	m.logger.Info("PBR: cleaned up route",
+		"interface", interfaceName, "gateway", gateway, "table", e.table, "fwmark", markStr)
 }
 
 // CleanupAll removes all PBR routes managed by this instance.
 func (m *PBRManager) CleanupAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for key, tbl := range m.tables {
-		parts := strings.SplitN(key, "|", 3)
-		if len(parts) == 3 {
-			tblStr := fmt.Sprintf("%d", tbl)
-			exec.Command("ip", "rule", "del", "from", parts[1], "lookup", tblStr).Run()
-			exec.Command("ip", "route", "del", "default", "table", tblStr).Run()
-			m.logger.Debug("PBR: cleaned up", "source", parts[1], "table", tbl)
-		}
+	for _, e := range m.entries {
+		tblStr := fmt.Sprintf("%d", e.table)
+		markStr := fmt.Sprintf("0x%x", e.mark)
+		exec.Command("ip", "rule", "del", "fwmark", markStr+"/0xffffffff", "lookup", tblStr).Run()
+		exec.Command("ip", "route", "del", "default", "table", tblStr).Run()
+		m.logger.Debug("PBR: cleaned up", "table", e.table, "fwmark", markStr)
 	}
-	m.tables = make(map[string]int)
+	m.entries = make(map[string]pbrEntry)
 }
 
 // Dispatcher manages WAN interface check scheduling and action execution.
@@ -132,11 +157,16 @@ func NewDispatcher(app *App) *Dispatcher {
 
 // Start loads all enabled WAN interfaces, runs them once, and starts the cron scheduler.
 func (d *Dispatcher) Start(ctx context.Context) error {
-	// Run all WAN interfaces once synchronously before starting cron.
 	wanInterfaces, err := d.db.ListWANInterfaces()
 	if err != nil {
 		return err
 	}
+
+	// Remove legacy source-based PBR rules from previous beta versions so
+	// they do not shadow the new fwmark rules. Best-effort — errors are
+	// logged and ignored.
+	d.cleanupLegacySourceRules(wanInterfaces)
+
 	for _, wi := range wanInterfaces {
 		if wi.Enabled {
 			d.checkWANInterface(ctx, wi.ID)
@@ -144,6 +174,45 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	}
 
 	return d.startCron(ctx)
+}
+
+// cleanupLegacySourceRules deletes any `ip rule from SOURCE lookup TBL`
+// entries that would have been installed by the previous source-based PBR
+// scheme. It reconstructs the old key (interface|source|gateway) for each
+// saved gateway-mode WAN and removes the rule if present. Leaves the table's
+// default route alone — the new EnsureRoute will replace it on the next tick.
+func (d *Dispatcher) cleanupLegacySourceRules(wanInterfaces []WANInterface) {
+	for _, wi := range wanInterfaces {
+		wi.Config.MigrateEgress()
+		if wi.Config.Egress.Mode != "gateway" {
+			continue
+		}
+		iface := wi.Config.Egress.InterfaceName
+		gw := wi.Config.Egress.Gateway
+		if iface == "" || gw == "" {
+			continue
+		}
+		src := wi.Config.Egress.SourceAddress
+		if src == "" {
+			if resolved, err := resolveSourceIP(iface); err == nil {
+				src = resolved
+			}
+		}
+		if src == "" {
+			continue
+		}
+		oldKey := fmt.Sprintf("%s|%s|%s", iface, src, gw)
+		oldTable, _ := DeriveMarkAndTable(oldKey)
+		tblStr := fmt.Sprintf("%d", oldTable)
+		if out, err := exec.Command("ip", "rule", "del", "from", src, "lookup", tblStr).CombinedOutput(); err == nil {
+			d.logger.Info("PBR: removed legacy source-based rule",
+				"interface", iface, "source", src, "gateway", gw, "table", oldTable)
+		} else if !strings.Contains(string(out), "No such") {
+			d.logger.Debug("PBR: legacy rule cleanup attempt",
+				"interface", iface, "source", src, "table", oldTable,
+				"stderr", strings.TrimSpace(string(out)))
+		}
+	}
 }
 
 // Stop gracefully stops the dispatcher.
@@ -459,21 +528,20 @@ func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, curr
 	}
 }
 
-// setupGatewayPBR ensures PBR routing is configured for gateway mode.
+// setupGatewayPBR ensures fwmark-based PBR is configured for gateway mode.
+// The source IP is resolved for display/state purposes only — PBR selection
+// is by fwmark, not source address.
 func (d *Dispatcher) setupGatewayPBR(egress *EgressConfig, logger *slog.Logger) error {
-	sourceAddr := egress.SourceAddress
-	if sourceAddr == "" && egress.InterfaceName != "" {
-		resolved, err := resolveSourceIP(egress.InterfaceName)
-		if err != nil {
-			return fmt.Errorf("resolving source IP: %w", err)
+	if egress.InterfaceName == "" || egress.Gateway == "" {
+		return fmt.Errorf("gateway mode requires interface + gateway, got interface=%q gateway=%q",
+			egress.InterfaceName, egress.Gateway)
+	}
+	if egress.SourceAddress == "" {
+		if resolved, err := resolveSourceIP(egress.InterfaceName); err == nil {
+			egress.SourceAddress = resolved
 		}
-		sourceAddr = resolved
-		egress.SourceAddress = sourceAddr // cache for DetectIP
 	}
-	if sourceAddr == "" || egress.Gateway == "" {
-		return fmt.Errorf("gateway mode requires interface + gateway, got source=%q gateway=%q", sourceAddr, egress.Gateway)
-	}
-	_, err := d.pbrManager.EnsureRoute(egress.InterfaceName, sourceAddr, egress.Gateway)
+	_, _, err := d.pbrManager.EnsureRoute(egress.InterfaceName, egress.Gateway)
 	return err
 }
 
