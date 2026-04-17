@@ -53,7 +53,7 @@ func loadTemplates() (*Templates, error) {
 	}
 	layoutContent := string(layoutBytes)
 
-	pages := []string{"dashboard", "wan_interfaces", "wan_interface_form", "actions", "action_form", "history", "settings"}
+	pages := []string{"wan_interfaces", "wan_interface_form", "actions", "action_form", "history", "settings"}
 	for _, page := range pages {
 		pageBytes, err := fs.ReadFile(templateFS, "templates/"+page+".html")
 		if err != nil {
@@ -186,6 +186,7 @@ type WANInterfaceDisplay struct {
 	StatusText       string
 	StatusBadgeClass string
 	LastCheck        string
+	LastError        string // surfaced on failed cards
 	ActionCount      int
 }
 
@@ -206,6 +207,7 @@ func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
 			wd.StatusBadgeClass = "badge badge-info"
 		case "failed":
 			wd.StatusBadgeClass = "badge badge-error"
+			wd.LastError = state.LastError
 		default:
 			wd.StatusBadgeClass = "badge badge-muted"
 		}
@@ -219,27 +221,6 @@ func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
 }
 
 // --- Page Handlers ---
-
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	wanInterfaces, _ := s.app.db.ListWANInterfaces()
-	var displays []WANInterfaceDisplay
-	for _, wi := range wanInterfaces {
-		displays = append(displays, s.buildWANInterfaceDisplay(wi))
-	}
-
-	runs, _, _ := s.app.db.GetRecentRunsJoined(HistoryFilter{Limit: 10})
-
-	data := struct {
-		PageData
-		WANInterfaces []WANInterfaceDisplay
-		RecentRuns    []ActionRunJoined
-	}{
-		PageData:      PageData{Title: "Dashboard", Active: "dashboard", CSRFToken: getCSRFToken(r)},
-		WANInterfaces: displays,
-		RecentRuns:    runs,
-	}
-	s.templates.renderPage(w, "dashboard", data)
-}
 
 func (s *Server) handleWANInterfacesPage(w http.ResponseWriter, r *http.Request) {
 	wanInterfaces, _ := s.app.db.ListWANInterfaces()
@@ -270,6 +251,9 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 		LinkedIDs      map[int64]bool
 		LinkedTriggers map[int64]string // action ID -> trigger_on
 		EgressFields   template.HTML    // pre-rendered egress fields
+		ScheduleValue  int              // for simple-mode dropdown
+		ScheduleUnit   string           // minutes/hours/days
+		CustomSchedule bool             // true if cron isn't a simple pattern
 	}{
 		PageData:       PageData{Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
 		IsEdit:         isEdit,
@@ -297,6 +281,13 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 		data.Title = "Add WAN Interface"
 		defaultCfg := DefaultWANInterfaceConfig()
 		data.WANInterface = &WANInterface{Config: defaultCfg, Schedule: "*/5 * * * *", Timezone: "Local"}
+	}
+
+	if v, u, ok := ParseSimpleSchedule(data.WANInterface.Schedule); ok {
+		data.ScheduleValue = v
+		data.ScheduleUnit = u
+	} else {
+		data.CustomSchedule = true
 	}
 
 	actions, _ := s.app.db.ListActions()
@@ -458,18 +449,18 @@ func (s *Server) renderAllActionSchemas(selected string) template.HTML {
 func (s *Server) handleHistoryPage(w http.ResponseWriter, r *http.Request) {
 	wanInterfaces, _ := s.app.db.ListWANInterfaces()
 	filter := parseHistoryFilter(r)
-	runs, total, _ := s.app.db.GetRecentRunsJoined(filter)
+	entries, total, _ := s.app.db.GetMergedHistory(filter)
 
 	data := struct {
 		PageData
 		WANInterfaces []WANInterface
-		Runs          []ActionRunJoined
+		Entries       []HistoryEntry
 		Total         int
 		Limit         int
 	}{
 		PageData:      PageData{Title: "Event History", Active: "history", CSRFToken: getCSRFToken(r)},
 		WANInterfaces: wanInterfaces,
-		Runs:          runs,
+		Entries:       entries,
 		Total:         total,
 		Limit:         filter.Limit,
 	}
@@ -509,7 +500,7 @@ func (s *Server) handleUIManualCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.dispatcher.checkWANInterface(r.Context(), id)
+	s.dispatcher.checkWANInterface(r.Context(), id, "manual")
 
 	wi, err := s.app.db.GetWANInterface(id)
 	if err != nil {
@@ -863,21 +854,26 @@ func (s *Server) handleUIActionSchema(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUIHistoryTable(w http.ResponseWriter, r *http.Request) {
 	filter := parseHistoryFilter(r)
-	runs, _, _ := s.app.db.GetRecentRunsJoined(filter)
+	entries, _, _ := s.app.db.GetMergedHistory(filter)
 
 	data := struct {
-		Runs []ActionRunJoined
-	}{Runs: runs}
+		Entries []HistoryEntry
+	}{Entries: entries}
 	s.templates.renderPartial(w, "history-rows", data)
 }
 
 func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
+	schedule, err := scheduleFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	wi := &WANInterface{
 		Name:     r.FormValue("name"),
 		Enabled:  true,
-		Schedule: r.FormValue("schedule"),
-		Timezone: r.FormValue("timezone"),
+		Schedule: schedule,
+		Timezone: "Local",
 		Config: WANInterfaceConfig{
 			ProbeURLs:   parseLines(r.FormValue("probe_urls")),
 			Strategy:    r.FormValue("strategy"),
@@ -888,9 +884,6 @@ func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Reque
 	if wi.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
-	}
-	if wi.Schedule == "" {
-		wi.Schedule = "*/5 * * * *"
 	}
 	if err := validateCron(wi.Schedule); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -916,10 +909,15 @@ func (s *Server) handleUIUpdateWANInterface(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	schedule, err := scheduleFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	existing.Name = r.FormValue("name")
 	existing.Enabled = r.FormValue("enabled") == "true"
-	existing.Schedule = r.FormValue("schedule")
-	existing.Timezone = r.FormValue("timezone")
+	existing.Schedule = schedule
+	existing.Timezone = "Local"
 	existing.Config = WANInterfaceConfig{
 		ProbeURLs:   parseLines(r.FormValue("probe_urls")),
 		Strategy:    r.FormValue("strategy"),
@@ -1147,6 +1145,31 @@ func firstProbeURL(raw string) string {
 		}
 	}
 	return ""
+}
+
+// scheduleFromForm builds a cron string from the form. The form submits
+// either schedule_mode=simple with schedule_value + schedule_unit, or
+// schedule_mode=cron with schedule_cron (used only when the existing cron
+// could not be parsed into the simple dropdown).
+func scheduleFromForm(r *http.Request) (string, error) {
+	mode := r.FormValue("schedule_mode")
+	if mode == "cron" {
+		raw := strings.TrimSpace(r.FormValue("schedule_cron"))
+		if raw == "" {
+			return "", fmt.Errorf("cron expression is required")
+		}
+		return raw, nil
+	}
+	valueStr := r.FormValue("schedule_value")
+	unit := r.FormValue("schedule_unit")
+	if valueStr == "" || unit == "" {
+		return "*/5 * * * *", nil
+	}
+	v, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return "", fmt.Errorf("schedule_value must be a number")
+	}
+	return ScheduleFromSimple(v, unit)
 }
 
 func parseEgressForm(r *http.Request) EgressConfig {

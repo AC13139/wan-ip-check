@@ -101,7 +101,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 // registerUIRoutes sets up all UI page + HTMX partial endpoints.
 func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	// Full pages
-	mux.HandleFunc("GET /{$}", s.handleDashboard)
+	mux.HandleFunc("GET /{$}", s.handleWANInterfacesPage)
 	mux.HandleFunc("GET /wan-interfaces", s.handleWANInterfacesPage)
 	mux.HandleFunc("GET /wan-interfaces/new", s.handleWANInterfaceForm)
 	mux.HandleFunc("GET /wan-interfaces/{id}", s.handleWANInterfaceForm)

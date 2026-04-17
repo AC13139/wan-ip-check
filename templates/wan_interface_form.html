@@ -25,21 +25,32 @@
 
   <div class="card mb-lg">
     <h3 class="section-title">Schedule</h3>
+    {{if .CustomSchedule}}
+    <div class="form-group">
+      <label class="form-label">Cron Expression (custom)</label>
+      <input type="text" name="schedule_cron" class="form-input mono"
+             value="{{.WANInterface.Schedule}}">
+      <div class="form-help">Current schedule is not expressible as a simple interval; editing the raw cron string.</div>
+    </div>
+    <input type="hidden" name="schedule_mode" value="cron">
+    {{else}}
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Cron Expression</label>
-        <input type="text" name="schedule" class="form-input mono"
-               value="{{if .IsEdit}}{{.WANInterface.Schedule}}{{else}}*/5 * * * *{{end}}"
-               placeholder="*/5 * * * *">
-        <div class="form-help">Standard cron format (minute hour dom month dow)</div>
+        <label class="form-label">Check every</label>
+        <input type="number" name="schedule_value" class="form-input" required
+               min="1" value="{{.ScheduleValue}}">
       </div>
       <div class="form-group">
-        <label class="form-label">Timezone</label>
-        <input type="text" name="timezone" class="form-input"
-               value="{{if .IsEdit}}{{.WANInterface.Timezone}}{{else}}Local{{end}}"
-               placeholder="Asia/Shanghai or Local">
+        <label class="form-label">Unit</label>
+        <select name="schedule_unit" class="form-select">
+          <option value="minutes" {{if eq .ScheduleUnit "minutes"}}selected{{end}}>Minutes</option>
+          <option value="hours" {{if eq .ScheduleUnit "hours"}}selected{{end}}>Hours</option>
+          <option value="days" {{if eq .ScheduleUnit "days"}}selected{{end}}>Days</option>
+        </select>
       </div>
     </div>
+    <input type="hidden" name="schedule_mode" value="simple">
+    {{end}}
   </div>
 
   <div class="card mb-lg">
