@@ -72,6 +72,7 @@
     <div id="network-diagnostics-panel"
          hx-get="/ui/network-diagnostics"
          hx-trigger="load"
+         hx-target="this"
          hx-swap="outerHTML">
       <div class="diagnostics-panel diagnostics-loading">
         <span class="diag-label">Detecting network environment…</span>
