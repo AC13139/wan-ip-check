@@ -1,0 +1,66 @@
+{{define "network-diagnostics"}}
+<div class="diagnostics-panel" id="network-diagnostics-panel">
+  <div class="diagnostics-header">
+    <h4 class="diagnostics-title">Network Environment</h4>
+    <button type="button" class="btn btn-secondary btn-sm"
+            hx-get="/ui/network-diagnostics"
+            hx-target="#network-diagnostics-panel"
+            hx-swap="outerHTML"
+            hx-indicator="#diag-spinner">
+      <span id="diag-spinner" class="htmx-indicator">…</span>
+      Refresh
+    </button>
+  </div>
+
+  <div class="diagnostics-body">
+    <div class="diagnostics-row">
+      <span class="diag-label">Runtime</span>
+      <span class="diag-value mono">
+        {{if eq .Runtime "docker"}}Docker{{if .DockerNetwork}} ({{.DockerNetwork}}){{end}}{{else if eq .Runtime "container"}}Container{{else}}Host{{end}}
+      </span>
+    </div>
+
+    <div class="diagnostics-row">
+      <span class="diag-label">NET_ADMIN</span>
+      {{if .NetAdmin}}
+      <span class="badge badge-success">✓ Available</span>
+      {{else}}
+      <span class="badge badge-error">✗ Unavailable</span>
+      {{end}}
+    </div>
+
+    <div class="diagnostics-row">
+      <span class="diag-label">Interfaces</span>
+      <span class="diag-value mono">
+        {{if .Interfaces}}
+          {{range $i, $iface := .Interfaces}}{{if $i}}, {{end}}{{$iface.Name}}{{if $iface.Addresses}} — {{index $iface.Addresses 0}}{{end}}{{end}}
+        {{else}}
+          <span class="badge badge-muted">Unknown</span>
+        {{end}}
+      </span>
+    </div>
+
+    <div class="diagnostics-row">
+      <span class="diag-label">Default Gateway</span>
+      <span class="diag-value mono">
+        {{if .DefaultGateway}}{{.DefaultGateway}}{{else}}<span class="badge badge-muted">Unknown</span>{{end}}
+      </span>
+    </div>
+  </div>
+
+  {{if .Recommendation}}
+  <div class="recommendation-banner">
+    <svg class="recommendation-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/>
+      <path d="M9 18h6"/>
+      <path d="M10 22h4"/>
+    </svg>
+    <span class="recommendation-text">{{.Recommendation}}</span>
+  </div>
+  {{end}}
+
+  <div class="diagnostics-footer">
+    <span class="diag-timestamp">Last checked {{.CheckedAt.Format "15:04:05"}}</span>
+  </div>
+</div>
+{{end}}

@@ -577,3 +577,111 @@ tbody tr:hover {
     grid-template-columns: 1fr;
   }
 }
+
+/* ========== Diagnostics Panel ========== */
+.diagnostics-panel {
+  background: var(--surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+.diagnostics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+.diagnostics-title {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0;
+}
+.diagnostics-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+.diagnostics-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+.diag-label {
+  flex: 0 0 140px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.diag-value {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+}
+.diag-value.mono {
+  font-family: var(--font-mono);
+}
+.diagnostics-footer {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+}
+.diag-timestamp {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.diagnostics-loading .diag-label {
+  color: var(--text-muted);
+}
+
+/* Recommendation banner inside diagnostics panel */
+.recommendation-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  background: var(--accent-wash);
+  border-left: 2px solid var(--accent);
+  padding: var(--space-sm) var(--space-md);
+  margin-top: var(--space-md);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.recommendation-icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.recommendation-text {
+  font-size: 13px;
+  color: var(--accent);
+  line-height: 1.4;
+}
+
+/* Test Route button + inline result */
+.test-route-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  flex-wrap: wrap;
+}
+.test-route-spinner {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 150ms ease-in;
+}
+.htmx-request .htmx-indicator {
+  opacity: 1;
+}
+.htmx-request.htmx-indicator {
+  opacity: 1;
+}
+.test-route-result:empty {
+  display: none;
+}

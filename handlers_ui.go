@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -71,10 +72,12 @@ func loadTemplates() (*Templates, error) {
 
 	// Partials — read and parse individually
 	partialFiles := map[string]string{
-		"history-rows":       "templates/history.html",
-		"config-fields":      "templates/partials/config_fields.html",
-		"wan-interface-card": "templates/partials/wan_interface_card.html",
-		"egress-fields":     "templates/partials/egress_fields.html",
+		"history-rows":         "templates/history.html",
+		"config-fields":        "templates/partials/config_fields.html",
+		"wan-interface-card":   "templates/partials/wan_interface_card.html",
+		"egress-fields":        "templates/partials/egress_fields.html",
+		"network-diagnostics":  "templates/partials/network_diagnostics.html",
+		"test-route-result":    "templates/partials/test_route_result.html",
 	}
 	for name, path := range partialFiles {
 		content, err := fs.ReadFile(templateFS, path)
@@ -535,6 +538,86 @@ func (s *Server) handleUIDeleteAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) handleUINetworkDiagnostics(w http.ResponseWriter, r *http.Request) {
+	d := collectDiagnostics(r.Context())
+	s.templates.renderPartial(w, "network-diagnostics", d)
+}
+
+func (s *Server) handleUITestRoute(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{OK: false, Message: "Invalid form data"})
+		return
+	}
+	egress := parseEgressForm(r)
+
+	probeURL := firstProbeURL(r.FormValue("probe_urls"))
+	if probeURL == "" {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{
+			OK: false, Message: "No probe URL configured",
+		})
+		return
+	}
+
+	cfg := WANInterfaceConfig{
+		ProbeURLs:   []string{probeURL},
+		Strategy:    "single",
+		TimeoutSecs: 10,
+		Egress:      egress,
+	}
+
+	// Gateway mode requires PBR setup. To avoid racing with scheduled checks
+	// that manage PBR for the same tuple, we check whether the tuple is owned
+	// by a saved WAN interface. If so, reuse its rule (no install, no cleanup).
+	// If not, install ephemerally and remove after probing.
+	if cfg.Egress.Mode == "gateway" {
+		if !checkNetAdmin() {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Gateway mode requires NET_ADMIN capability.",
+			})
+			return
+		}
+		sourceIP, err := resolveSourceIP(cfg.Egress.InterfaceName)
+		if err != nil {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Could not resolve source IP for interface " + cfg.Egress.InterfaceName + ": " + err.Error(),
+			})
+			return
+		}
+		cfg.Egress.SourceAddress = sourceIP
+
+		owned := s.tupleOwnedBySavedWAN(cfg.Egress.InterfaceName, cfg.Egress.Gateway)
+		if _, err := s.dispatcher.pbrManager.EnsureRoute(cfg.Egress.InterfaceName, sourceIP, cfg.Egress.Gateway); err != nil {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Failed to install PBR rule: " + err.Error(),
+			})
+			return
+		}
+		// Only clean up if the tuple is NOT owned by a saved WAN. If it is,
+		// cleanup would tear down a scheduled check's PBR mid-flight.
+		if !owned {
+			defer s.dispatcher.pbrManager.CleanupRoute(cfg.Egress.InterfaceName, sourceIP, cfg.Egress.Gateway)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	ip, err := DetectIP(ctx, cfg, s.dispatcher.directClient)
+	if err != nil {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{
+			OK: false, Message: "Probe failed: " + err.Error(),
+		})
+		return
+	}
+	s.templates.renderPartial(w, "test-route-result", testRouteResult{
+		OK: true, Message: "Detected " + ip + " via " + probeURL,
+	})
+}
+
+type testRouteResult struct {
+	OK      bool
+	Message string
+}
+
 func (s *Server) handleUIEgressFields(w http.ResponseWriter, r *http.Request) {
 	mode := r.URL.Query().Get("egress_mode")
 	if mode == "" {
@@ -825,6 +908,38 @@ func parseHistoryFilter(r *http.Request) HistoryFilter {
 		}
 	}
 	return f
+}
+
+// tupleOwnedBySavedWAN reports whether any saved WAN interface owns the given
+// gateway-mode tuple (interface name + gateway). Used by Test Route to avoid
+// racing with scheduled checks that manage the same PBR rule.
+func (s *Server) tupleOwnedBySavedWAN(ifaceName, gateway string) bool {
+	wanInterfaces, err := s.app.db.ListWANInterfaces()
+	if err != nil {
+		return false
+	}
+	for _, wi := range wanInterfaces {
+		if !wi.Enabled {
+			continue
+		}
+		wi.Config.MigrateEgress()
+		if wi.Config.Egress.Mode == "gateway" &&
+			wi.Config.Egress.InterfaceName == ifaceName &&
+			wi.Config.Egress.Gateway == gateway {
+			return true
+		}
+	}
+	return false
+}
+
+// firstProbeURL returns the first non-empty line from a probe_urls textarea value.
+func firstProbeURL(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func parseEgressForm(r *http.Request) EgressConfig {

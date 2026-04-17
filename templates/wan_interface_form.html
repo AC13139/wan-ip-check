@@ -68,6 +68,16 @@
 
   <div class="card mb-lg">
     <h3 class="section-title">Network / Egress</h3>
+
+    <div id="network-diagnostics-panel"
+         hx-get="/ui/network-diagnostics"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+      <div class="diagnostics-panel diagnostics-loading">
+        <span class="diag-label">Detecting network environment…</span>
+      </div>
+    </div>
+
     <div class="form-group">
       <label class="form-label">Routing Method</label>
       <select name="egress_mode" class="form-select"
@@ -84,6 +94,19 @@
          hx-get="/ui/egress-fields?egress_mode={{if .IsEdit}}{{.WANInterface.Config.Egress.Mode}}{{else}}default{{end}}&interface_name={{if .IsEdit}}{{.WANInterface.Config.Egress.InterfaceName}}{{end}}&gateway={{if .IsEdit}}{{.WANInterface.Config.Egress.Gateway}}{{end}}&proxy_url={{if .IsEdit}}{{.WANInterface.Config.Egress.ProxyURL}}{{end}}"
          hx-trigger="load"
          hx-swap="innerHTML">
+    </div>
+
+    <div class="test-route-wrap">
+      <button type="button" class="btn btn-secondary btn-sm"
+              hx-post="/ui/test-route"
+              hx-target="#test-route-result"
+              hx-swap="innerHTML"
+              hx-include="closest form"
+              hx-indicator="#test-route-spinner">
+        Test Route
+      </button>
+      <span id="test-route-spinner" class="htmx-indicator test-route-spinner">Testing…</span>
+      <span id="test-route-result" class="test-route-result"></span>
     </div>
   </div>
 

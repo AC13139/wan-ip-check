@@ -1,0 +1,7 @@
+{{define "test-route-result"}}
+{{if .OK}}
+<span class="badge badge-success">✓ {{.Message}}</span>
+{{else}}
+<span class="badge badge-error">✗ {{.Message}}</span>
+{{end}}
+{{end}}

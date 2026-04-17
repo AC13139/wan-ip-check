@@ -640,6 +640,10 @@ func (s *Server) handleNetworkCapabilities(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+func (s *Server) handleNetworkDiagnostics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, collectDiagnostics(r.Context()))
+}
+
 func listNetworkInterfaces() ([]NetworkInterface, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {

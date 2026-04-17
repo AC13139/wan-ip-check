@@ -92,6 +92,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/wan-interfaces/{id}/actions", s.handleSetWANInterfaceActions)
 	mux.HandleFunc("GET /api/network/interfaces", s.handleNetworkInterfaces)
 	mux.HandleFunc("GET /api/network/capabilities", s.handleNetworkCapabilities)
+	mux.HandleFunc("GET /api/network/diagnostics", s.handleNetworkDiagnostics)
 	mux.HandleFunc("GET /api/history", s.handleGlobalHistory)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
@@ -129,6 +130,8 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ui/egress-fields", s.handleUIEgressFields)
 	mux.HandleFunc("GET /ui/action-schema", s.handleUIActionSchema)
 	mux.HandleFunc("GET /ui/history-table", s.handleUIHistoryTable)
+	mux.HandleFunc("GET /ui/network-diagnostics", s.handleUINetworkDiagnostics)
+	mux.HandleFunc("POST /ui/test-route", s.handleUITestRoute)
 }
 
 // --- Middleware ---
