@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -302,4 +304,63 @@ func buildClientWithLocalAddr(addr string, timeout time.Duration) *http.Client {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
+// --- Schedule helpers: simplified dropdown (value, unit) ↔ cron ---
+
+// SupportedScheduleUnits lists the unit options the form exposes.
+var SupportedScheduleUnits = []string{"minutes", "hours", "days"}
+
+// ScheduleFromSimple builds a cron expression for "every N <unit>".
+// Accepts minutes, hours, or days. Returns an error on unsupported unit or
+// out-of-range value.
+func ScheduleFromSimple(value int, unit string) (string, error) {
+	if value < 1 {
+		return "", fmt.Errorf("interval must be >= 1")
+	}
+	switch unit {
+	case "minutes":
+		if value > 59 {
+			return "", fmt.Errorf("minutes must be 1-59")
+		}
+		return fmt.Sprintf("*/%d * * * *", value), nil
+	case "hours":
+		if value > 23 {
+			return "", fmt.Errorf("hours must be 1-23")
+		}
+		return fmt.Sprintf("0 */%d * * *", value), nil
+	case "days":
+		if value > 31 {
+			return "", fmt.Errorf("days must be 1-31")
+		}
+		return fmt.Sprintf("0 0 */%d * *", value), nil
+	}
+	return "", fmt.Errorf("unsupported unit %q", unit)
+}
+
+// ParseSimpleSchedule tries to recognize a cron expression produced by
+// ScheduleFromSimple. Returns (value, unit, ok). Value ranges must match
+// ScheduleFromSimple's limits (minutes 1-59, hours 1-23, days 1-31) so that
+// what Parse accepts, Save-with-same-value always round-trips successfully.
+// Callers that need to show a custom cron fall back to raw editing when
+// ok=false.
+func ParseSimpleSchedule(cron string) (int, string, bool) {
+	cron = strings.TrimSpace(cron)
+	patterns := []struct {
+		re    *regexp.Regexp
+		unit  string
+		upper int
+	}{
+		{regexp.MustCompile(`^\*/(\d+) \* \* \* \*$`), "minutes", 59},
+		{regexp.MustCompile(`^0 \*/(\d+) \* \* \*$`), "hours", 23},
+		{regexp.MustCompile(`^0 0 \*/(\d+) \* \*$`), "days", 31},
+	}
+	for _, p := range patterns {
+		if m := p.re.FindStringSubmatch(cron); m != nil {
+			if v, err := strconv.Atoi(m[1]); err == nil && v >= 1 && v <= p.upper {
+				return v, p.unit, true
+			}
+		}
+	}
+	return 0, "", false
 }
