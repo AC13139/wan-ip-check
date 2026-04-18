@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"text/template"
 )
@@ -76,6 +77,32 @@ func (e *WebhookExecutor) ConfigSchema() []ConfigField {
 			Placeholder: "{\"ip\":\"{{.NewIP}}\",\"old\":\"{{.OldIP}}\"}",
 			HelpText:    "Go template with {{.NewIP}}, {{.OldIP}}, {{.WANInterfaceName}}, {{.Event}}, {{.Timestamp}}."},
 	}
+}
+
+// ParseForm converts the generic edit form values for a webhook action
+// into a correctly typed config JSON. The crucial detail is Headers:
+// the UI submits the textarea contents verbatim, but webhookConfig.Headers
+// is map[string]string. buildConfigFromForm would stringify it and every
+// Execute would then fail with a type-mismatch unmarshal (#1).
+//
+// Here we parse the headers textarea as JSON once at save time so the
+// stored config is already the right shape.
+func (e *WebhookExecutor) ParseForm(form url.Values) (json.RawMessage, error) {
+	cfg := webhookConfig{
+		URL:          strings.TrimSpace(form.Get("config_url")),
+		Method:       strings.ToUpper(strings.TrimSpace(form.Get("config_method"))),
+		BodyTemplate: form.Get("config_body_template"),
+		Headers:      map[string]string{},
+	}
+	if cfg.Method == "" {
+		cfg.Method = "POST"
+	}
+	if raw := strings.TrimSpace(form.Get("config_headers")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cfg.Headers); err != nil {
+			return nil, fmt.Errorf("headers must be a JSON object of string values, e.g. {\"Authorization\":\"Bearer ...\"}: %w", err)
+		}
+	}
+	return json.Marshal(cfg)
 }
 
 func (e *WebhookExecutor) ValidateConfig(raw json.RawMessage) error {

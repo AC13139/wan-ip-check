@@ -1073,23 +1073,27 @@ func (s *Server) handleUIUpdateWANInterface(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Update action links
-	existingLinks, _ := s.app.db.GetLinkedActions(id, "")
-	for _, l := range existingLinks {
-		s.app.db.UnlinkAction(id, l.ActionID)
-	}
+	// Update action links in a single transaction (#3).
+	var links []WANInterfaceAction
 	for _, aidStr := range r.Form["action_ids"] {
-		aid, _ := strconv.ParseInt(aidStr, 10, 64)
+		aid, err := strconv.ParseInt(aidStr, 10, 64)
+		if err != nil || aid == 0 {
+			continue
+		}
 		triggerOn := r.FormValue(fmt.Sprintf("trigger_%d", aid))
 		if triggerOn == "" {
 			triggerOn = "ip_changed"
 		}
-		s.app.db.LinkAction(&WANInterfaceAction{
+		links = append(links, WANInterfaceAction{
 			WANInterfaceID: id,
 			ActionID:       aid,
 			TriggerOn:      triggerOn,
 			Enabled:        true,
 		})
+	}
+	if err := s.app.db.SetWANInterfaceLinks(id, links); err != nil {
+		http.Error(w, "failed to update action links: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	s.dispatcher.Reload(r.Context())

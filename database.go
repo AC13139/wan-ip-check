@@ -526,6 +526,41 @@ func (db *DB) GetActionTriggers(actionID int64) ([]ActionTrigger, error) {
 	return out, rows.Err()
 }
 
+// SetWANInterfaceLinks replaces the complete set of links owned by a single
+// WAN interface in one transaction. Symmetric with SetActionTriggers: each
+// side of the N:M relation can be fully replaced without touching rows
+// scoped to the other side. Fixes #3 (non-transactional relink).
+func (db *DB) SetWANInterfaceLinks(wanInterfaceID int64, links []WANInterfaceAction) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("DELETE FROM wan_interface_actions WHERE wan_interface_id = ?", wanInterfaceID); err != nil {
+		return fmt.Errorf("clearing WAN links: %w", err)
+	}
+	for _, l := range links {
+		if l.ActionID == 0 {
+			continue
+		}
+		trigger := l.TriggerOn
+		switch trigger {
+		case "ip_changed", "ip_unchanged_daily", "both":
+		default:
+			trigger = "ip_changed"
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO wan_interface_actions (wan_interface_id, action_id, trigger_on, run_order, enabled)
+			 VALUES (?, ?, ?, ?, ?)
+			 ON CONFLICT(wan_interface_id, action_id) DO UPDATE SET trigger_on = excluded.trigger_on, run_order = excluded.run_order, enabled = excluded.enabled`,
+			wanInterfaceID, l.ActionID, trigger, l.RunOrder, l.Enabled,
+		); err != nil {
+			return fmt.Errorf("linking action %d: %w", l.ActionID, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // SetActionTriggers replaces the complete set of triggers for an action
 // in a single transaction. Triggers not present in the passed slice are
 // removed; matching rows are upserted with the new trigger_on / run_order.

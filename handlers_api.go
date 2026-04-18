@@ -525,14 +525,7 @@ func (s *Server) handleSetWANInterfaceActions(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Replace all links for this WAN interface
-	// First remove existing
-	existingLinks, _ := s.app.db.GetLinkedActions(id, "")
-	for _, l := range existingLinks {
-		s.app.db.UnlinkAction(id, l.ActionID)
-	}
-
-	// Add new links
+	// Replace all links for this WAN interface in one transaction (#3).
 	for i := range links {
 		links[i].WANInterfaceID = id
 		if links[i].TriggerOn == "" {
@@ -540,10 +533,10 @@ func (s *Server) handleSetWANInterfaceActions(w http.ResponseWriter, r *http.Req
 		}
 		links[i].Enabled = true
 		links[i].RunOrder = i
-		if err := s.app.db.LinkAction(&links[i]); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to link action")
-			return
-		}
+	}
+	if err := s.app.db.SetWANInterfaceLinks(id, links); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update links: "+err.Error())
+		return
 	}
 
 	// Return updated links with masked secrets
