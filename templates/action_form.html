@@ -119,6 +119,102 @@
   {{end}}
 
   <div class="card mb-lg">
+    <h3 class="section-title">Triggers</h3>
+    <div class="form-help">
+      When these WAN interface events occur, this action runs. Add a trigger for each WAN that should fire it.
+    </div>
+    <div id="triggers-list" class="triggers-list"></div>
+    <input type="hidden" name="triggers_json" id="triggers-json" value="[]">
+    <button type="button" id="add-trigger-btn" class="btn btn-secondary btn-sm">+ Add trigger</button>
+    {{if not .AllWANs}}
+    <div class="form-help">
+      No WAN interfaces defined yet. <a href="/wan-interfaces/new">Create one</a> first to add triggers.
+    </div>
+    {{end}}
+  </div>
+
+  <template id="trigger-row-tpl">
+    <div class="trigger-row">
+      <span class="trigger-label">Triggered by</span>
+      <select class="form-select trigger-wan" aria-label="WAN interface">
+        <option value="">— select WAN —</option>
+        {{range .AllWANs}}
+        <option value="{{.ID}}">{{.Name}}</option>
+        {{end}}
+      </select>
+      <span class="trigger-label">when</span>
+      <select class="form-select trigger-event" aria-label="Event type">
+        <option value="ip_changed">IP changes</option>
+        <option value="ip_unchanged_daily">Daily summary (no change)</option>
+        <option value="both">Both</option>
+      </select>
+      <button type="button" class="btn btn-sm btn-danger trigger-remove" title="Remove this trigger">×</button>
+    </div>
+  </template>
+
+  <script>
+  (function () {
+    var list = document.getElementById('triggers-list');
+    var hidden = document.getElementById('triggers-json');
+    var addBtn = document.getElementById('add-trigger-btn');
+    var tpl = document.getElementById('trigger-row-tpl');
+    if (!list || !hidden || !addBtn || !tpl) return;
+
+    function serialize() {
+      var rows = list.querySelectorAll('.trigger-row');
+      var data = [];
+      rows.forEach(function (row) {
+        var wanID = parseInt(row.querySelector('.trigger-wan').value || '0', 10);
+        if (!wanID) return;
+        data.push({
+          wan_interface_id: wanID,
+          trigger_on: row.querySelector('.trigger-event').value || 'ip_changed'
+        });
+      });
+      hidden.value = JSON.stringify(data);
+    }
+
+    function wireRow(row) {
+      row.querySelectorAll('select').forEach(function (el) {
+        el.addEventListener('change', serialize);
+      });
+      row.querySelector('.trigger-remove').addEventListener('click', function () {
+        row.remove();
+        serialize();
+      });
+    }
+
+    function addRow(existing) {
+      var node = tpl.content.cloneNode(true);
+      var row = node.querySelector('.trigger-row');
+      if (existing) {
+        row.querySelector('.trigger-wan').value = String(existing.WANInterfaceID || existing.wan_interface_id || '');
+        row.querySelector('.trigger-event').value = existing.TriggerOn || existing.trigger_on || 'ip_changed';
+      }
+      wireRow(row);
+      list.appendChild(node);
+    }
+
+    // Hydrate from server-rendered JSON (edit path)
+    try {
+      var initial = {{.TriggersJSON}};
+      if (Array.isArray(initial) && initial.length > 0) {
+        initial.forEach(addRow);
+      } else if (!{{if .IsEdit}}true{{else}}false{{end}}) {
+        addRow(); // one empty row on create form
+      }
+    } catch (e) { /* ignore */ }
+
+    addBtn.addEventListener('click', function () {
+      addRow();
+      serialize();
+    });
+
+    serialize();
+  })();
+  </script>
+
+  <div class="card mb-lg">
     <h3 class="section-title">Validate Config</h3>
     <div class="test-action-wrap">
       <button type="button" class="btn btn-secondary btn-sm"

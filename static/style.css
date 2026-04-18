@@ -804,6 +804,34 @@ tbody tr:hover {
   line-height: 1.5;
 }
 
+/* ========== Action edit: Triggers repeater ========== */
+.triggers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+.trigger-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+.trigger-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.trigger-row .form-select {
+  width: auto;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.trigger-row .trigger-remove {
+  min-width: 32px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+
 /* ========== Action edit: Test button + inline result ========== */
 .test-action-wrap {
   display: flex;

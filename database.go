@@ -488,6 +488,80 @@ func (db *DB) UnlinkAction(wanInterfaceID, actionID int64) error {
 	return err
 }
 
+// ActionTrigger is one row in the Action-form Triggers repeater: a WAN
+// interface that fires this action on a given event. Joined with the WAN
+// name for form rendering.
+type ActionTrigger struct {
+	ActionID         int64
+	WANInterfaceID   int64
+	WANInterfaceName string
+	TriggerOn        string // ip_changed | ip_unchanged_daily | both
+	RunOrder         int
+}
+
+// GetActionTriggers lists the triggers declared for a single action.
+func (db *DB) GetActionTriggers(actionID int64) ([]ActionTrigger, error) {
+	rows, err := db.conn.Query(
+		`SELECT wia.wan_interface_id, COALESCE(wi.name, '?') AS wan_name,
+		        wia.trigger_on, wia.run_order
+		 FROM wan_interface_actions wia
+		 LEFT JOIN wan_interfaces wi ON wi.id = wia.wan_interface_id
+		 WHERE wia.action_id = ?
+		 ORDER BY wia.run_order, wia.wan_interface_id`,
+		actionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActionTrigger
+	for rows.Next() {
+		var t ActionTrigger
+		if err := rows.Scan(&t.WANInterfaceID, &t.WANInterfaceName, &t.TriggerOn, &t.RunOrder); err != nil {
+			return nil, err
+		}
+		t.ActionID = actionID
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SetActionTriggers replaces the complete set of triggers for an action
+// in a single transaction. Triggers not present in the passed slice are
+// removed; matching rows are upserted with the new trigger_on / run_order.
+// WAN-side Linked Actions for other actions are untouched.
+func (db *DB) SetActionTriggers(actionID int64, triggers []ActionTrigger) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM wan_interface_actions WHERE action_id = ?", actionID); err != nil {
+		return fmt.Errorf("clearing existing triggers: %w", err)
+	}
+	for _, t := range triggers {
+		if t.WANInterfaceID == 0 {
+			continue
+		}
+		trigger := t.TriggerOn
+		switch trigger {
+		case "ip_changed", "ip_unchanged_daily", "both":
+		default:
+			trigger = "ip_changed"
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO wan_interface_actions (wan_interface_id, action_id, trigger_on, run_order, enabled)
+			 VALUES (?, ?, ?, ?, 1)
+			 ON CONFLICT(wan_interface_id, action_id) DO UPDATE SET trigger_on = excluded.trigger_on, run_order = excluded.run_order, enabled = 1`,
+			t.WANInterfaceID, actionID, trigger, t.RunOrder,
+		); err != nil {
+			return fmt.Errorf("inserting trigger for wan %d: %w", t.WANInterfaceID, err)
+		}
+	}
+	return tx.Commit()
+}
+
 func (db *DB) GetLinkedActions(wanInterfaceID int64, triggerOn string) ([]WANInterfaceAction, error) {
 	query := `SELECT wia.wan_interface_id, wia.action_id, wia.trigger_on, wia.run_order, wia.enabled,
 	                 a.type, a.name, a.config

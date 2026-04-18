@@ -380,21 +380,29 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		PageData
-		Action           *Action
-		IsEdit           bool
-		ActionType       string
-		Schema           []ConfigField
-		ConfigValues     map[string]interface{}
-		AllTypes         []ActionTypeInfo
-		TypeDisplayName  string
-		SchemaPanels     template.HTML // pre-rendered panels for all types (new form only)
-		CustomFormHTML   template.HTML // pre-rendered custom form (edit path for CF DNS)
+		Action          *Action
+		IsEdit          bool
+		ActionType      string
+		Schema          []ConfigField
+		ConfigValues    map[string]interface{}
+		AllTypes        []ActionTypeInfo
+		TypeDisplayName string
+		SchemaPanels    template.HTML // pre-rendered panels for all types (new form only)
+		CustomFormHTML  template.HTML // pre-rendered custom form (edit path for CF DNS)
+		AllWANs         []WANInterface
+		TriggersJSON    template.JS
 	}{
 		PageData:     PageData{Active: "actions", CSRFToken: getCSRFToken(r)},
 		IsEdit:       isEdit,
 		AllTypes:     s.app.registry.TypeInfos(),
 		ConfigValues: make(map[string]interface{}),
+		TriggersJSON: template.JS("[]"),
 	}
+
+	// Triggers source-of-truth for the action-side form. The WAN form keeps
+	// its Linked Actions section as a secondary bulk-link affordance.
+	allWANs, _ := s.app.db.ListWANInterfaces()
+	data.AllWANs = allWANs
 
 	if isEdit {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -417,6 +425,10 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 				data.CustomFormHTML = template.HTML(html)
 			}
 		}
+
+		triggers, _ := s.app.db.GetActionTriggers(id)
+		triggersJSON, _ := json.Marshal(triggers)
+		data.TriggersJSON = template.JS(string(triggersJSON))
 	} else {
 		data.Title = "Add Action"
 		data.ActionType = actionType
@@ -1118,10 +1130,32 @@ func (s *Server) handleUICreateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse triggers BEFORE creating the action so invalid triggers_json
+	// does not leave an orphan action row behind.
+	triggers, err := parseTriggersForm(r, 0)
+	if err != nil {
+		http.Error(w, "invalid triggers: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	action := &Action{Type: actionType, Name: name, Enabled: true, ConfigJSON: encrypted}
-	if _, err := s.app.db.CreateAction(action); err != nil {
+	newID, err := s.app.db.CreateAction(action)
+	if err != nil {
 		http.Error(w, "failed to create action", http.StatusInternalServerError)
 		return
+	}
+
+	if len(triggers) > 0 {
+		for i := range triggers {
+			triggers[i].ActionID = newID
+		}
+		if err := s.app.db.SetActionTriggers(newID, triggers); err != nil {
+			// Action row exists but triggers failed — keep the action so
+			// user can re-save triggers via Edit instead of losing their
+			// config input. Surface the partial result as an error.
+			http.Error(w, "action created but saving triggers failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("HX-Redirect", "/actions")
@@ -1171,8 +1205,48 @@ func (s *Server) handleUIUpdateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if triggers, err := parseTriggersForm(r, id); err != nil {
+		http.Error(w, "invalid triggers: "+err.Error(), http.StatusBadRequest)
+		return
+	} else if err := s.app.db.SetActionTriggers(id, triggers); err != nil {
+		http.Error(w, "failed to save triggers: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// No dispatcher.Reload(): scheduled checks call GetLinkedActions live
+	// on every event, so trigger changes take effect on the next check
+	// cycle without a reload.
+
 	w.Header().Set("HX-Redirect", "/actions")
 	w.WriteHeader(http.StatusOK)
+}
+
+// parseTriggersForm reads the triggers_json hidden field into []ActionTrigger.
+// Empty / missing is valid (no triggers = action is dormant).
+func parseTriggersForm(r *http.Request, actionID int64) ([]ActionTrigger, error) {
+	raw := strings.TrimSpace(r.FormValue("triggers_json"))
+	if raw == "" {
+		return nil, nil
+	}
+	var rows []struct {
+		WANInterfaceID int64  `json:"wan_interface_id"`
+		TriggerOn      string `json:"trigger_on"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil, fmt.Errorf("parsing triggers: %w", err)
+	}
+	out := make([]ActionTrigger, 0, len(rows))
+	for i, t := range rows {
+		if t.WANInterfaceID == 0 {
+			continue
+		}
+		out = append(out, ActionTrigger{
+			ActionID:       actionID,
+			WANInterfaceID: t.WANInterfaceID,
+			TriggerOn:      t.TriggerOn,
+			RunOrder:       i,
+		})
+	}
+	return out, nil
 }
 
 func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) {
