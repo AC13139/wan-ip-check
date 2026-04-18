@@ -2,7 +2,7 @@ name: Build & Push Docker Beta Image
 
 on:
   push:
-    branches: [v2-dev]
+    branches: [v2-dev, v2.1-dev]
     tags: ["v*-beta*", "v*-rc*"]
   workflow_dispatch:
 
@@ -39,9 +39,10 @@ jobs:
         with:
           images: ac13139/wan-ip-check
           tags: |
-            type=raw,value=beta,enable=${{ github.ref == 'refs/heads/v2-dev' }}
+            type=raw,value=beta,enable=${{ github.ref == 'refs/heads/v2-dev' || github.ref == 'refs/heads/v2.1-dev' }}
             type=raw,value=v2-dev,enable=${{ github.ref == 'refs/heads/v2-dev' }}
-            type=sha,prefix=beta-,format=short,enable=${{ github.ref == 'refs/heads/v2-dev' }}
+            type=raw,value=v2.1-dev,enable=${{ github.ref == 'refs/heads/v2.1-dev' }}
+            type=sha,prefix=beta-,format=short,enable=${{ github.ref == 'refs/heads/v2-dev' || github.ref == 'refs/heads/v2.1-dev' }}
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push
