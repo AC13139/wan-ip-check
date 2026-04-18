@@ -804,6 +804,58 @@ tbody tr:hover {
   line-height: 1.5;
 }
 
+/* ========== Settings: About card ========== */
+.about-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+.about-app {
+  font-weight: 600;
+}
+.about-version {
+  font-size: 13px;
+  color: var(--accent);
+  margin-right: var(--space-sm);
+}
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+.about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.about-link:hover {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.about-pull {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.about-pull-cmd {
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  user-select: all;
+}
+
 /* ========== Action edit: Triggers repeater ========== */
 .triggers-list {
   display: flex;

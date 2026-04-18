@@ -15,6 +15,15 @@ import (
 	"time"
 )
 
+// Version and Commit are injected at build time via -ldflags:
+//   -X main.Version=2.1.0 -X main.Commit=abc1234
+// and displayed in the Settings > About card. Unset values fall back to
+// "dev" / "unknown".
+var (
+	Version = "dev"
+	Commit  = "unknown"
+)
+
 // App holds runtime state: config, database, HTTP clients, registries, and logger.
 type App struct {
 	boot         *BootConfig

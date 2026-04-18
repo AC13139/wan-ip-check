@@ -54,6 +54,13 @@ func loadTemplates() (*Templates, error) {
 	}
 	layoutContent := string(layoutBytes)
 
+	// funcmap exposes {{version}} / {{commit}} to every page template so the
+	// sidebar footer and any future About-style hooks can render without
+	// threading Version / Commit through each handler's data struct.
+	funcs := template.FuncMap{
+		"version": func() string { return Version },
+		"commit":  func() string { return Commit },
+	}
 	pages := []string{"wan_interfaces", "wan_interface_form", "actions", "action_form", "history", "settings"}
 	for _, page := range pages {
 		pageBytes, err := fs.ReadFile(templateFS, "templates/"+page+".html")
@@ -61,7 +68,7 @@ func loadTemplates() (*Templates, error) {
 			return nil, fmt.Errorf("reading %s.html: %w", page, err)
 		}
 		// Parse layout first as the root template, then parse the page template into it
-		tmpl, err := template.New("layout").Parse(layoutContent)
+		tmpl, err := template.New("layout").Funcs(funcs).Parse(layoutContent)
 		if err != nil {
 			return nil, fmt.Errorf("parsing layout for %s: %w", page, err)
 		}
@@ -538,12 +545,18 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		PageData
 		DailySummaryTime string
 		Timezone         string
+		TimezoneGroups   []TimezoneGroup
 		KeyPath          string
+		Version          string
+		Commit           string
 	}{
 		PageData:         PageData{Title: "Settings", Active: "settings", CSRFToken: getCSRFToken(r)},
 		DailySummaryTime: summaryTime,
 		Timezone:         tz,
+		TimezoneGroups:   TimezoneGroupsWithOffsets(tz),
 		KeyPath:          filepath.Join(s.app.boot.DataDir, "encryption.key"),
+		Version:          Version,
+		Commit:           Commit,
 	}
 	s.templates.renderPage(w, "settings", data)
 }

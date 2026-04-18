@@ -4,13 +4,17 @@
 
 # Stage 1: Build the Go binary (templates + static embedded via embed.FS)
 FROM golang:1.25-alpine AS builder
+ARG VERSION=dev
+ARG COMMIT=unknown
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go ./
 COPY templates/ templates/
 COPY static/ static/
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o wan-ip-check .
+RUN CGO_ENABLED=0 go build \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+    -o wan-ip-check .
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.21
