@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -52,7 +54,7 @@ func loadTemplates() (*Templates, error) {
 	}
 	layoutContent := string(layoutBytes)
 
-	pages := []string{"dashboard", "sources", "source_form", "actions", "action_form", "history", "settings"}
+	pages := []string{"wan_interfaces", "wan_interface_form", "actions", "action_form", "history", "settings"}
 	for _, page := range pages {
 		pageBytes, err := fs.ReadFile(templateFS, "templates/"+page+".html")
 		if err != nil {
@@ -71,9 +73,13 @@ func loadTemplates() (*Templates, error) {
 
 	// Partials — read and parse individually
 	partialFiles := map[string]string{
-		"history-rows": "templates/history.html",
-		"config-fields": "templates/partials/config_fields.html",
-		"source-card":   "templates/partials/source_card.html",
+		"history-rows":           "templates/history.html",
+		"config-fields":          "templates/partials/config_fields.html",
+		"wan-interface-card":     "templates/partials/wan_interface_card.html",
+		"egress-fields":          "templates/partials/egress_fields.html",
+		"network-diagnostics":    "templates/partials/network_diagnostics.html",
+		"test-route-result":      "templates/partials/test_route_result.html",
+		"cloudflare-dns-fields":  "templates/partials/cloudflare_dns_fields.html",
 	}
 	for name, path := range partialFiles {
 		content, err := fs.ReadFile(templateFS, path)
@@ -173,100 +179,85 @@ func getCSRFToken(r *http.Request) string {
 	return cookie.Value
 }
 
-// --- Source Display Data ---
+// --- WAN Interface Display Data ---
 
-type SourceDisplay struct {
-	Source          Source
-	IP              string
-	StatusClass     string // ok, changed, failed
-	StatusText      string
+type WANInterfaceDisplay struct {
+	WANInterface     WANInterface
+	IP               string
+	StatusClass      string // ok, changed, failed
+	StatusText       string
 	StatusBadgeClass string
-	LastCheck       string
-	ActionCount     int
+	LastCheck        string
+	LastError        string // surfaced on failed cards
+	ActionCount      int
 }
 
-func (s *Server) buildSourceDisplay(src Source) SourceDisplay {
-	sd := SourceDisplay{Source: src}
-	state, err := s.app.db.GetSourceState(src.ID)
+func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
+	wd := WANInterfaceDisplay{WANInterface: wi}
+	state, err := s.app.db.GetWANInterfaceState(wi.ID)
 	if err == nil && state != nil {
-		sd.IP = state.LastObservedIP
-		sd.StatusClass = state.LastStatus
-		sd.StatusText = state.LastStatus
-		if sd.StatusText == "" {
-			sd.StatusText = "pending"
+		wd.IP = state.LastObservedIP
+		wd.StatusClass = state.LastStatus
+		wd.StatusText = state.LastStatus
+		if wd.StatusText == "" {
+			wd.StatusText = "pending"
 		}
 		switch state.LastStatus {
 		case "ok":
-			sd.StatusBadgeClass = "badge badge-success"
+			wd.StatusBadgeClass = "badge badge-success"
 		case "changed":
-			sd.StatusBadgeClass = "badge badge-info"
+			wd.StatusBadgeClass = "badge badge-info"
 		case "failed":
-			sd.StatusBadgeClass = "badge badge-error"
+			wd.StatusBadgeClass = "badge badge-error"
+			wd.LastError = state.LastError
 		default:
-			sd.StatusBadgeClass = "badge badge-muted"
+			wd.StatusBadgeClass = "badge badge-muted"
 		}
 		if !state.LastCheckAt.IsZero() {
-			sd.LastCheck = relativeTime(state.LastCheckAt)
+			wd.LastCheck = relativeTime(state.LastCheckAt)
 		}
 	}
-	count, _ := s.app.db.GetSourceLinkedActionCount(src.ID)
-	sd.ActionCount = count
-	return sd
+	count, _ := s.app.db.GetWANInterfaceLinkedActionCount(wi.ID)
+	wd.ActionCount = count
+	return wd
 }
 
 // --- Page Handlers ---
 
-func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
-	var displays []SourceDisplay
-	for _, src := range sources {
-		displays = append(displays, s.buildSourceDisplay(src))
-	}
-
-	runs, _, _ := s.app.db.GetRecentRunsJoined(HistoryFilter{Limit: 10})
-
-	data := struct {
-		PageData
-		Sources    []SourceDisplay
-		RecentRuns []ActionRunJoined
-	}{
-		PageData:   PageData{Title: "Dashboard", Active: "dashboard", CSRFToken: getCSRFToken(r)},
-		Sources:    displays,
-		RecentRuns: runs,
-	}
-	s.templates.renderPage(w, "dashboard", data)
-}
-
-func (s *Server) handleSourcesPage(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
-	var displays []SourceDisplay
-	for _, src := range sources {
-		displays = append(displays, s.buildSourceDisplay(src))
+func (s *Server) handleWANInterfacesPage(w http.ResponseWriter, r *http.Request) {
+	wanInterfaces, _ := s.app.db.ListWANInterfaces()
+	var displays []WANInterfaceDisplay
+	for _, wi := range wanInterfaces {
+		displays = append(displays, s.buildWANInterfaceDisplay(wi))
 	}
 
 	data := struct {
 		PageData
-		Sources []SourceDisplay
+		WANInterfaces []WANInterfaceDisplay
 	}{
-		PageData: PageData{Title: "Sources", Active: "sources", CSRFToken: getCSRFToken(r)},
-		Sources:  displays,
+		PageData:      PageData{Title: "WAN Interfaces", Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
+		WANInterfaces: displays,
 	}
-	s.templates.renderPage(w, "sources", data)
+	s.templates.renderPage(w, "wan_interfaces", data)
 }
 
-func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	isEdit := idStr != ""
 
 	data := struct {
 		PageData
-		Source     *Source
-		IsEdit    bool
-		AllActions  []Action
-		LinkedIDs  map[int64]bool
-		LinkedTriggers map[int64]string // action ID → trigger_on
+		WANInterface   *WANInterface
+		IsEdit         bool
+		AllActions     []Action
+		LinkedIDs      map[int64]bool
+		LinkedTriggers map[int64]string // action ID -> trigger_on
+		EgressFields   template.HTML    // pre-rendered egress fields
+		ScheduleValue  int              // for simple-mode dropdown
+		ScheduleUnit   string           // minutes/hours/days
+		CustomSchedule bool             // true if cron isn't a simple pattern
 	}{
-		PageData:  PageData{Active: "sources", CSRFToken: getCSRFToken(r)},
+		PageData:       PageData{Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
 		IsEdit:         isEdit,
 		LinkedIDs:      make(map[int64]bool),
 		LinkedTriggers: make(map[int64]string),
@@ -274,13 +265,14 @@ func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
 
 	if isEdit {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
-		src, err := s.app.db.GetSource(id)
+		wi, err := s.app.db.GetWANInterface(id)
 		if err != nil {
-			http.Redirect(w, r, "/sources", http.StatusSeeOther)
+			http.Redirect(w, r, "/wan-interfaces", http.StatusSeeOther)
 			return
 		}
-		data.Source = src
-		data.Title = "Edit Source: " + src.Name
+		wi.Config.MigrateEgress()
+		data.WANInterface = wi
+		data.Title = "Edit WAN Interface: " + wi.Name
 
 		links, _ := s.app.db.GetLinkedActions(id, "")
 		for _, l := range links {
@@ -288,29 +280,85 @@ func (s *Server) handleSourceForm(w http.ResponseWriter, r *http.Request) {
 			data.LinkedTriggers[l.ActionID] = l.TriggerOn
 		}
 	} else {
-		data.Title = "Add Source"
-		defaultCfg := DefaultSourceConfig()
-		data.Source = &Source{Config: defaultCfg, Schedule: "*/5 * * * *", Timezone: "Local"}
+		data.Title = "Add WAN Interface"
+		defaultCfg := DefaultWANInterfaceConfig()
+		data.WANInterface = &WANInterface{Config: defaultCfg, Schedule: "*/5 * * * *", Timezone: "Local"}
+	}
+
+	if v, u, ok := ParseSimpleSchedule(data.WANInterface.Schedule); ok {
+		data.ScheduleValue = v
+		data.ScheduleUnit = u
+	} else {
+		data.CustomSchedule = true
 	}
 
 	actions, _ := s.app.db.ListActions()
 	data.AllActions = actions
+	data.EgressFields = s.renderEgressFields(data.WANInterface.Config.Egress)
 
-	s.templates.renderPage(w, "source_form", data)
+	s.templates.renderPage(w, "wan_interface_form", data)
+}
+
+// renderEgressFields renders all three egress-mode variants (default,
+// gateway, proxy) wrapped in visibility-control divs. A tiny inline script
+// in the form template shows only the variant matching the current
+// dropdown value. This eliminates the HTMX round-trip on dropdown change
+// (previously failed behind reverse proxies with 522 timeouts) and makes
+// the mode switch instant.
+func (s *Server) renderEgressFields(egress EgressConfig) template.HTML {
+	ifaces, _ := listNetworkInterfaces()
+	selectedMode := egress.Mode
+	if selectedMode == "" {
+		selectedMode = "default"
+	}
+	tmpl, ok := s.templates.partials["egress-fields"]
+	if !ok {
+		return template.HTML("")
+	}
+	render := func(mode string) string {
+		var buf strings.Builder
+		_ = tmpl.Lookup("egress-fields").Execute(&buf, struct {
+			Mode          string
+			Interfaces    []NetworkInterface
+			InterfaceName string
+			Gateway       string
+			ProxyURL      string
+		}{
+			Mode: mode, Interfaces: ifaces,
+			InterfaceName: egress.InterfaceName,
+			Gateway:       egress.Gateway,
+			ProxyURL:      egress.ProxyURL,
+		})
+		return buf.String()
+	}
+	var buf strings.Builder
+	for _, m := range []string{"default", "gateway", "proxy"} {
+		style := "display:none"
+		if m == selectedMode {
+			style = ""
+		}
+		fmt.Fprintf(&buf, `<div data-egress-mode=%q style=%q>%s</div>`, m, style, render(m))
+	}
+	return template.HTML(buf.String())
 }
 
 func (s *Server) handleActionsPage(w http.ResponseWriter, r *http.Request) {
 	actions, _ := s.app.db.ListActions()
 
 	type ActionDisplay struct {
-		Action        Action
-		LinkedSources []string
+		Action              Action
+		TypeDisplayName     string
+		LinkedWANInterfaces []string
 	}
 	var displays []ActionDisplay
 	for _, a := range actions {
 		a.ConfigJSON = maskSecrets(a.Type, a.ConfigJSON, s.app.registry)
-		sources, _ := s.app.db.GetActionLinkedSources(a.ID)
-		displays = append(displays, ActionDisplay{Action: a, LinkedSources: sources})
+		wanInterfaces, _ := s.app.db.GetActionLinkedWANInterfaces(a.ID)
+		displays = append(displays, ActionDisplay{
+			Action:              a,
+			TypeDisplayName:     s.app.registry.DisplayName(a.Type),
+			LinkedWANInterfaces: wanInterfaces,
+		})
 	}
 
 	data := struct {
@@ -332,18 +380,29 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		PageData
-		Action       *Action
-		IsEdit       bool
-		ActionType   string
-		Schema       []ConfigField
-		ConfigValues map[string]interface{}
-		AllTypes     []string
+		Action          *Action
+		IsEdit          bool
+		ActionType      string
+		Schema          []ConfigField
+		ConfigValues    map[string]interface{}
+		AllTypes        []ActionTypeInfo
+		TypeDisplayName string
+		SchemaPanels    template.HTML // pre-rendered panels for all types (new form only)
+		CustomFormHTML  template.HTML // pre-rendered custom form (edit path for CF DNS)
+		AllWANs         []WANInterface
+		TriggersJSON    template.JS
 	}{
 		PageData:     PageData{Active: "actions", CSRFToken: getCSRFToken(r)},
 		IsEdit:       isEdit,
-		AllTypes:     s.app.registry.Types(),
+		AllTypes:     s.app.registry.TypeInfos(),
 		ConfigValues: make(map[string]interface{}),
+		TriggersJSON: template.JS("[]"),
 	}
+
+	// Triggers source-of-truth for the action-side form. The WAN form keeps
+	// its Linked Actions section as a secondary bulk-link affordance.
+	allWANs, _ := s.app.db.ListWANInterfaces()
+	data.AllWANs = allWANs
 
 	if isEdit {
 		id, _ := strconv.ParseInt(idStr, 10, 64)
@@ -354,46 +413,113 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 		}
 		data.Action = action
 		data.ActionType = action.Type
+		data.TypeDisplayName = s.app.registry.DisplayName(action.Type)
 		data.Title = "Edit Action: " + action.Name
 
-		// Mask secrets and parse config for form values
 		masked := maskSecrets(action.Type, action.ConfigJSON, s.app.registry)
 		json.Unmarshal(masked, &data.ConfigValues)
 
 		if executor, err := s.app.registry.Get(action.Type); err == nil {
 			data.Schema = executor.ConfigSchema()
+			if html := s.renderCustomActionForm(executor, data.ConfigValues); html != "" {
+				data.CustomFormHTML = template.HTML(html)
+			}
 		}
+
+		triggers, _ := s.app.db.GetActionTriggers(id)
+		triggersJSON, _ := json.Marshal(triggers)
+		data.TriggersJSON = template.JS(string(triggersJSON))
 	} else {
 		data.Title = "Add Action"
 		data.ActionType = actionType
-		if actionType != "" {
-			if executor, err := s.app.registry.Get(actionType); err == nil {
-				data.Schema = executor.ConfigSchema()
-				json.Unmarshal(executor.DefaultConfig(), &data.ConfigValues)
-			}
-		}
+		data.SchemaPanels = s.renderAllActionSchemas(actionType)
 	}
 
 	s.templates.renderPage(w, "action_form", data)
 }
 
+// renderAllActionSchemas pre-renders a panel per registered action type,
+// wrapped in <div data-action-type="X" style="display:none"> so the new
+// form's type dropdown can toggle them via a local script. Eliminates the
+// HTMX round-trip to /ui/action-schema (which 522s behind reverse proxies).
+func (s *Server) renderAllActionSchemas(selected string) template.HTML {
+	genericTmpl := s.templates.partials["config-fields"]
+	var buf strings.Builder
+	placeholderStyle := "display:none"
+	if selected == "" {
+		placeholderStyle = ""
+	}
+	fmt.Fprintf(&buf, `<div data-action-type="" style=%q><p class="text-muted">Select an action type.</p></div>`,
+		placeholderStyle)
+	for _, t := range s.app.registry.Types() {
+		executor, err := s.app.registry.Get(t)
+		if err != nil {
+			continue
+		}
+		style := "display:none"
+		if t == selected {
+			style = ""
+		}
+		var sub strings.Builder
+		if rendered := s.renderCustomActionForm(executor, nil); rendered != "" {
+			sub.WriteString(rendered)
+		} else if genericTmpl != nil {
+			_ = genericTmpl.Execute(&sub, executor.ConfigSchema())
+		}
+		fmt.Fprintf(&buf, `<div data-action-type=%q style=%q>%s</div>`,
+			t, style, sub.String())
+	}
+	return template.HTML(buf.String())
+}
+
+// renderCustomActionForm renders the executor's custom partial (if any)
+// against the provided values. Returns "" when the executor does not
+// declare a custom template. Executors may optionally implement
+// PrepareFormView to transform raw config into template-ready values.
+func (s *Server) renderCustomActionForm(executor ActionExecutor, values map[string]interface{}) string {
+	type customTmpl interface{ CustomFormTemplate() string }
+	c, ok := executor.(customTmpl)
+	if !ok {
+		return ""
+	}
+	name := c.CustomFormTemplate()
+	if name == "" {
+		return ""
+	}
+	tmpl := s.templates.partials[name]
+	if tmpl == nil {
+		return ""
+	}
+	if values == nil {
+		values = map[string]interface{}{}
+	}
+	if prep, ok := executor.(interface {
+		PrepareFormView(map[string]interface{}) map[string]interface{}
+	}); ok {
+		values = prep.PrepareFormView(values)
+	}
+	var sub strings.Builder
+	_ = tmpl.Execute(&sub, values)
+	return sub.String()
+}
+
 func (s *Server) handleHistoryPage(w http.ResponseWriter, r *http.Request) {
-	sources, _ := s.app.db.ListSources()
+	wanInterfaces, _ := s.app.db.ListWANInterfaces()
 	filter := parseHistoryFilter(r)
-	runs, total, _ := s.app.db.GetRecentRunsJoined(filter)
+	entries, total, _ := s.app.db.GetMergedHistory(filter)
 
 	data := struct {
 		PageData
-		Sources []Source
-		Runs    []ActionRunJoined
-		Total   int
-		Limit   int
+		WANInterfaces []WANInterface
+		Entries       []HistoryEntry
+		Total         int
+		Limit         int
 	}{
-		PageData: PageData{Title: "Event History", Active: "history", CSRFToken: getCSRFToken(r)},
-		Sources:  sources,
-		Runs:     runs,
-		Total:    total,
-		Limit:    filter.Limit,
+		PageData:      PageData{Title: "Event History", Active: "history", CSRFToken: getCSRFToken(r)},
+		WANInterfaces: wanInterfaces,
+		Entries:       entries,
+		Total:         total,
+		Limit:         filter.Limit,
 	}
 	s.templates.renderPage(w, "history", data)
 }
@@ -431,32 +557,32 @@ func (s *Server) handleUIManualCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.dispatcher.checkSource(r.Context(), id)
+	s.dispatcher.checkWANInterface(r.Context(), id, "manual")
 
-	src, err := s.app.db.GetSource(id)
+	wi, err := s.app.db.GetWANInterface(id)
 	if err != nil {
-		http.Error(w, "source not found", http.StatusNotFound)
+		http.Error(w, "WAN interface not found", http.StatusNotFound)
 		return
 	}
-	display := s.buildSourceDisplay(*src)
-	s.templates.renderPartial(w, "source-card", display)
+	display := s.buildWANInterfaceDisplay(*wi)
+	s.templates.renderPartial(w, "wan-interface-card", display)
 }
 
-func (s *Server) handleUIToggleSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIToggleWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	src, err := s.app.db.GetSource(id)
+	wi, err := s.app.db.GetWANInterface(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	src.Enabled = !src.Enabled
-	if err := s.app.db.UpdateSource(src); err != nil {
-		http.Error(w, "failed to update source", http.StatusInternalServerError)
+	wi.Enabled = !wi.Enabled
+	if err := s.app.db.UpdateWANInterface(wi); err != nil {
+		http.Error(w, "failed to update WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
-	w.WriteHeader(http.StatusOK)
+	display := s.buildWANInterfaceDisplay(*wi)
+	s.templates.renderPartial(w, "wan-interface-card", display)
 }
 
 func (s *Server) handleUIToggleAction(w http.ResponseWriter, r *http.Request) {
@@ -475,49 +601,210 @@ func (s *Server) handleUIToggleAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
+// handleUIExecuteAction runs the saved action once per linked WAN interface,
+// using each WAN's current last_observed_ip. Each run is logged to
+// action_runs. Manual executions never set NeedsRetry — retries are a
+// property of automated scheduled runs only. Returns an HTMX partial listing
+// per-WAN outcomes.
+func (s *Server) handleUIExecuteAction(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	action, err := s.app.db.GetAction(id)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-
+	if !action.Enabled {
+		fmt.Fprintf(w, `<span class="badge badge-error">action disabled</span>`)
+		return
+	}
 	executor, err := s.app.registry.Get(action.Type)
 	if err != nil {
 		fmt.Fprintf(w, `<span class="badge badge-error">unknown type</span>`)
 		return
 	}
-
-	// CF actions: validate only. Discord/webhook: execute test.
-	if action.Type == "cloudflare_dns" || action.Type == "cloudflare_gateway" {
-		if err := executor.ValidateConfig(action.ConfigJSON); err != nil {
-			fmt.Fprintf(w, `<span class="badge badge-error">%s</span>`, template.HTMLEscapeString(err.Error()))
-		} else {
-			fmt.Fprintf(w, `<span class="badge badge-success">config valid</span>`)
-		}
+	links, err := s.app.db.GetActionLinkedWANInterfacesWithState(id)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">load error</span>`)
+		return
+	}
+	if len(links) == 0 {
+		fmt.Fprintf(w, `<span class="badge badge-muted">no linked WAN</span>`)
+		return
+	}
+	decrypted, err := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">decrypt error</span>`)
 		return
 	}
 
-	decrypted, _ := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
-	event := IPEvent{
-		SourceName: "Test",
-		EventType:  "ip_changed",
-		OldIP:      "203.0.113.0",
-		NewIP:      "203.0.113.1",
-		Timestamp:  time.Now().UTC().Format(time.RFC3339),
+	type result struct {
+		Name   string
+		OK     bool
+		Detail string
 	}
-	if err := executor.Execute(r.Context(), event, decrypted); err != nil {
-		fmt.Fprintf(w, `<span class="badge badge-error">%s</span>`, template.HTMLEscapeString(err.Error()))
-	} else {
-		fmt.Fprintf(w, `<span class="badge badge-success">sent</span>`)
+	results := make([]result, 0, len(links))
+	for _, link := range links {
+		if link.LastObservedIP == "" {
+			results = append(results, result{Name: link.Name, OK: false, Detail: "no IP yet"})
+			s.app.db.LogActionRun(&ActionRun{
+				WANInterfaceID: link.WANInterfaceID, ActionID: id,
+				EventType: "ip_changed", Status: "failed",
+				NeedsRetry: false, ErrorMsg: "manual execute skipped: no observed IP",
+			})
+			continue
+		}
+		execErr := s.safeExecute(r.Context(), executor, IPEvent{
+			WANInterfaceID:   link.WANInterfaceID,
+			WANInterfaceName: link.Name,
+			EventType:        "ip_changed",
+			OldIP:            link.LastObservedIP,
+			NewIP:            link.LastObservedIP,
+			Timestamp:        time.Now().UTC().Format(time.RFC3339),
+		}, decrypted, 15*time.Second)
+		status := "success"
+		errMsg := ""
+		if execErr != nil {
+			status = "failed"
+			errMsg = execErr.Error()
+		}
+		s.app.db.LogActionRun(&ActionRun{
+			WANInterfaceID: link.WANInterfaceID, ActionID: id,
+			EventType: "ip_changed", OldIP: link.LastObservedIP, NewIP: link.LastObservedIP,
+			// NeedsRetry is always false for manual execute — the retry
+			// queue is for automated scheduled runs only.
+			Status: status, NeedsRetry: false, ErrorMsg: errMsg,
+		})
+		results = append(results, result{
+			Name: link.Name, OK: execErr == nil,
+			Detail: link.LastObservedIP,
+		})
+	}
+
+	// Render inline per-WAN result badges.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	for i, rr := range results {
+		if i > 0 {
+			fmt.Fprint(w, " ")
+		}
+		class := "badge-success"
+		icon := "✓"
+		if !rr.OK {
+			class = "badge-error"
+			icon = "✗"
+		}
+		fmt.Fprintf(w, `<span class="badge %s">%s %s (%s)</span>`,
+			class, icon,
+			template.HTMLEscapeString(rr.Name),
+			template.HTMLEscapeString(rr.Detail))
 	}
 }
 
-func (s *Server) handleUIDeleteSource(w http.ResponseWriter, r *http.Request) {
+// handleUITestAction runs a dry-run with synthetic IPs against an unsaved
+// (in-progress) action config submitted via the edit form. Does NOT write
+// to action_runs. Returns a single inline badge.
+func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid form</span>`)
+		return
+	}
+	actionType := r.FormValue("type")
+	executor, err := s.app.registry.Get(actionType)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">unknown type</span>`)
+		return
+	}
+
+	// Build config JSON from form fields (mask-merge secrets against existing
+	// record if an action_id is provided so users editing existing actions
+	// can test without re-entering secrets).
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid form: %s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+	if existingIDStr := r.FormValue("action_id"); existingIDStr != "" {
+		if existingID, err := strconv.ParseInt(existingIDStr, 10, 64); err == nil {
+			if existing, err := s.app.db.GetAction(existingID); err == nil {
+				configJSON = mergeSecretFields(configJSON, existing.ConfigJSON, executor.SecretFields())
+			}
+		}
+	}
+
+	if err := executor.ValidateConfig(configJSON); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid config: %s</span>`,
+			template.HTMLEscapeString(err.Error()))
+		return
+	}
+
+	encrypted, err := EncryptActionSecrets(configJSON, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">encrypt error</span>`)
+		return
+	}
+	decrypted, err := DecryptActionSecrets(encrypted, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">decrypt error</span>`)
+		return
+	}
+
+	// Prefer a read-only TestConfig probe when the executor provides one
+	// (currently: Cloudflare DNS). Otherwise fall back to a synthetic-IP
+	// Execute (Discord/Webhook — sends a real test notification).
+	if tester, ok := executor.(interface {
+		TestConfig(context.Context, json.RawMessage) (string, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		summary, err := tester.TestConfig(ctx, decrypted)
+		if err != nil {
+			fmt.Fprintf(w, `<span class="badge badge-error">✗ %s</span>`,
+				template.HTMLEscapeString(err.Error()))
+			return
+		}
+		msg := summary
+		if msg == "" {
+			msg = "config OK"
+		}
+		fmt.Fprintf(w, `<span class="badge badge-success">✓ %s</span>`,
+			template.HTMLEscapeString(msg))
+		return
+	}
+
+	event := IPEvent{
+		WANInterfaceName: "Test",
+		EventType:        "ip_changed",
+		OldIP:            "198.51.100.1",
+		NewIP:            "203.0.113.42",
+		Timestamp:        time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := s.safeExecute(r.Context(), executor, event, decrypted, 15*time.Second); err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">✗ %s</span>`,
+			template.HTMLEscapeString(err.Error()))
+		return
+	}
+	fmt.Fprintf(w, `<span class="badge badge-success">✓ test sent with synthetic IP 203.0.113.42</span>`)
+}
+
+// safeExecute wraps executor.Execute with a timeout context and panic
+// containment so a buggy executor cannot take down the request goroutine.
+func (s *Server) safeExecute(ctx context.Context, executor ActionExecutor,
+	event IPEvent, config json.RawMessage, timeout time.Duration) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("executor panic: %v", rec)
+			s.logger.Error("executor panic",
+				"action_type", event.EventType, "panic", rec)
+		}
+	}()
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return executor.Execute(runCtx, event, config)
+}
+
+func (s *Server) handleUIDeleteWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err := s.app.db.DeleteSource(id); err != nil {
-		http.Error(w, "failed to delete source", http.StatusInternalServerError)
+	if err := s.app.db.DeleteWANInterface(id); err != nil {
+		http.Error(w, "failed to delete WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
@@ -531,6 +818,162 @@ func (s *Server) handleUIDeleteAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleUINetworkDiagnostics(w http.ResponseWriter, r *http.Request) {
+	d := collectDiagnostics(r.Context())
+	s.templates.renderPartial(w, "network-diagnostics", d)
+}
+
+func (s *Server) handleUITestRoute(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{OK: false, Message: "Invalid form data"})
+		return
+	}
+	egress := parseEgressForm(r)
+
+	probeURL := firstProbeURL(r.FormValue("probe_urls"))
+	if probeURL == "" {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{
+			OK: false, Message: "No probe URL configured",
+		})
+		return
+	}
+
+	cfg := WANInterfaceConfig{
+		ProbeURLs:   []string{probeURL},
+		Strategy:    "single",
+		TimeoutSecs: 10,
+		Egress:      egress,
+	}
+
+	// Gateway mode requires fwmark-based PBR setup. To avoid racing with
+	// scheduled checks that manage PBR for the same tuple, we check whether
+	// the tuple is owned by an enabled saved WAN. If so, reuse its rule.
+	// If not, install ephemerally and remove after probing.
+	if cfg.Egress.Mode == "gateway" {
+		if !checkNetAdmin() {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Gateway mode requires NET_ADMIN capability.",
+			})
+			return
+		}
+		if cfg.Egress.InterfaceName == "" || cfg.Egress.Gateway == "" {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Gateway mode requires both interface and gateway IP.",
+			})
+			return
+		}
+		// Source IP resolved for display/state only; not used for PBR routing.
+		if src, err := resolveSourceIP(cfg.Egress.InterfaceName); err == nil {
+			cfg.Egress.SourceAddress = src
+		}
+
+		owned := s.tupleOwnedBySavedWAN(cfg.Egress.InterfaceName, cfg.Egress.Gateway)
+		if _, _, err := s.dispatcher.pbrManager.EnsureRoute(cfg.Egress.InterfaceName, cfg.Egress.Gateway); err != nil {
+			s.templates.renderPartial(w, "test-route-result", testRouteResult{
+				OK: false, Message: "Failed to install PBR rule: " + err.Error(),
+			})
+			return
+		}
+		if !owned {
+			defer s.dispatcher.pbrManager.CleanupRoute(cfg.Egress.InterfaceName, cfg.Egress.Gateway)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	ip, err := DetectIP(ctx, cfg, s.dispatcher.directClient)
+	if err != nil {
+		s.templates.renderPartial(w, "test-route-result", testRouteResult{
+			OK: false, Message: "Probe failed: " + err.Error(),
+		})
+		return
+	}
+	s.templates.renderPartial(w, "test-route-result", testRouteResult{
+		OK: true, Message: "Detected " + ip + " via " + probeURL,
+	})
+}
+
+type testRouteResult struct {
+	OK      bool
+	Message string
+}
+
+func (s *Server) handleUIEgressFields(w http.ResponseWriter, r *http.Request) {
+	mode := r.URL.Query().Get("egress_mode")
+	if mode == "" {
+		mode = "default"
+	}
+	ifaces, _ := listNetworkInterfaces()
+	data := struct {
+		Mode          string
+		Interfaces    []NetworkInterface
+		InterfaceName string
+		Gateway       string
+		ProxyURL      string
+	}{
+		Mode:          mode,
+		Interfaces:    ifaces,
+		InterfaceName: r.URL.Query().Get("interface_name"),
+		Gateway:       r.URL.Query().Get("gateway"),
+		ProxyURL:      r.URL.Query().Get("proxy_url"),
+	}
+	s.templates.renderPartial(w, "egress-fields", data)
+}
+
+// handleUICloudflareZones fetches the zones reachable by a given API token
+// and returns an HTML fragment of <option> tags ready to swap into the
+// Cloudflare DNS form's zone select. Accepts either a fresh api_token or,
+// for the edit path, an action_id whose stored token is decrypted for reuse
+// (so users editing an existing action need not re-enter the secret).
+func (s *Server) handleUICloudflareZones(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("api_token"))
+	if token == "" || token == secretMask {
+		if idStr := r.FormValue("action_id"); idStr != "" {
+			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+				if action, err := s.app.db.GetAction(id); err == nil {
+					if dec, err := DecryptActionSecrets(action.ConfigJSON, []string{"api_token"}, s.app.encKey); err == nil {
+						var cfg struct {
+							APIToken string `json:"api_token"`
+						}
+						json.Unmarshal(dec, &cfg)
+						token = cfg.APIToken
+					}
+				}
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if token == "" {
+		fmt.Fprint(w, `<option value="">Enter API Token first</option>`)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	zones, err := ListCloudflareZones(ctx, s.dispatcher.directClient, token)
+	if err != nil {
+		fmt.Fprintf(w, `<option value="">Error: %s</option>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+	if len(zones) == 0 {
+		fmt.Fprint(w, `<option value="">No zones found for this token</option>`)
+		return
+	}
+	fmt.Fprint(w, `<option value="">Select a zone…</option>`)
+	selectedZone := r.FormValue("zone_id")
+	for _, z := range zones {
+		sel := ""
+		if z.ID == selectedZone {
+			sel = " selected"
+		}
+		fmt.Fprintf(w, `<option value=%q data-zone-name=%q%s>%s</option>`,
+			z.ID, z.Name, sel, template.HTMLEscapeString(z.Name))
+	}
 }
 
 func (s *Server) handleUIActionSchema(w http.ResponseWriter, r *http.Request) {
@@ -549,70 +992,75 @@ func (s *Server) handleUIActionSchema(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUIHistoryTable(w http.ResponseWriter, r *http.Request) {
 	filter := parseHistoryFilter(r)
-	runs, _, _ := s.app.db.GetRecentRunsJoined(filter)
+	entries, _, _ := s.app.db.GetMergedHistory(filter)
 
 	data := struct {
-		Runs []ActionRunJoined
-	}{Runs: runs}
+		Entries []HistoryEntry
+	}{Entries: entries}
 	s.templates.renderPartial(w, "history-rows", data)
 }
 
-func (s *Server) handleUICreateSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	src := &Source{
+	schedule, err := scheduleFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	wi := &WANInterface{
 		Name:     r.FormValue("name"),
 		Enabled:  true,
-		Schedule: r.FormValue("schedule"),
-		Timezone: r.FormValue("timezone"),
-		Config: SourceConfig{
-			ProbeURLs:     parseLines(r.FormValue("probe_urls")),
-			Strategy:      r.FormValue("strategy"),
-			BindInterface: r.FormValue("bind_interface"),
-			BindAddress:   r.FormValue("bind_address"),
-			TimeoutSecs:   parseInt(r.FormValue("timeout"), 10),
+		Schedule: schedule,
+		Timezone: "Local",
+		Config: WANInterfaceConfig{
+			ProbeURLs:   parseLines(r.FormValue("probe_urls")),
+			Strategy:    r.FormValue("strategy"),
+			TimeoutSecs: parseInt(r.FormValue("timeout"), 10),
+			Egress:      parseEgressForm(r),
 		},
 	}
-	if src.Name == "" {
+	if wi.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	if src.Schedule == "" {
-		src.Schedule = "*/5 * * * *"
-	}
-	if err := validateCron(src.Schedule); err != nil {
+	if err := validateCron(wi.Schedule); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	if _, err := s.app.db.CreateSource(src); err != nil {
-		http.Error(w, "failed to create source", http.StatusInternalServerError)
+	if _, err := s.app.db.CreateWANInterface(wi); err != nil {
+		http.Error(w, "failed to create WAN interface", http.StatusInternalServerError)
 		return
 	}
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
+	w.Header().Set("HX-Redirect", "/wan-interfaces")
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUIUpdateWANInterface(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	r.ParseForm()
 
-	existing, err := s.app.db.GetSource(id)
+	existing, err := s.app.db.GetWANInterface(id)
 	if err != nil {
-		http.Error(w, "source not found", http.StatusNotFound)
+		http.Error(w, "WAN interface not found", http.StatusNotFound)
 		return
 	}
 
+	schedule, err := scheduleFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	existing.Name = r.FormValue("name")
 	existing.Enabled = r.FormValue("enabled") == "true"
-	existing.Schedule = r.FormValue("schedule")
-	existing.Timezone = r.FormValue("timezone")
-	existing.Config = SourceConfig{
-		ProbeURLs:     parseLines(r.FormValue("probe_urls")),
-		Strategy:      r.FormValue("strategy"),
-		BindInterface: r.FormValue("bind_interface"),
-		BindAddress:   r.FormValue("bind_address"),
-		TimeoutSecs:   parseInt(r.FormValue("timeout"), 10),
+	existing.Schedule = schedule
+	existing.Timezone = "Local"
+	existing.Config = WANInterfaceConfig{
+		ProbeURLs:   parseLines(r.FormValue("probe_urls")),
+		Strategy:    r.FormValue("strategy"),
+		TimeoutSecs: parseInt(r.FormValue("timeout"), 10),
+		Egress:      parseEgressForm(r),
 	}
 
 	if err := validateCron(existing.Schedule); err != nil {
@@ -620,8 +1068,8 @@ func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.app.db.UpdateSource(existing); err != nil {
-		http.Error(w, "failed to update source", http.StatusInternalServerError)
+	if err := s.app.db.UpdateWANInterface(existing); err != nil {
+		http.Error(w, "failed to update WAN interface", http.StatusInternalServerError)
 		return
 	}
 
@@ -636,16 +1084,16 @@ func (s *Server) handleUIUpdateSource(w http.ResponseWriter, r *http.Request) {
 		if triggerOn == "" {
 			triggerOn = "ip_changed"
 		}
-		s.app.db.LinkAction(&SourceAction{
-			SourceID:  id,
-			ActionID:  aid,
-			TriggerOn: triggerOn,
-			Enabled:   true,
+		s.app.db.LinkAction(&WANInterfaceAction{
+			WANInterfaceID: id,
+			ActionID:       aid,
+			TriggerOn:      triggerOn,
+			Enabled:        true,
 		})
 	}
 
 	s.dispatcher.Reload(r.Context())
-	w.Header().Set("HX-Redirect", "/sources")
+	w.Header().Set("HX-Redirect", "/wan-interfaces")
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -665,7 +1113,11 @@ func (s *Server) handleUICreateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if err := executor.ValidateConfig(configJSON); err != nil {
 		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
@@ -678,10 +1130,32 @@ func (s *Server) handleUICreateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse triggers BEFORE creating the action so invalid triggers_json
+	// does not leave an orphan action row behind.
+	triggers, err := parseTriggersForm(r, 0)
+	if err != nil {
+		http.Error(w, "invalid triggers: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	action := &Action{Type: actionType, Name: name, Enabled: true, ConfigJSON: encrypted}
-	if _, err := s.app.db.CreateAction(action); err != nil {
+	newID, err := s.app.db.CreateAction(action)
+	if err != nil {
 		http.Error(w, "failed to create action", http.StatusInternalServerError)
 		return
+	}
+
+	if len(triggers) > 0 {
+		for i := range triggers {
+			triggers[i].ActionID = newID
+		}
+		if err := s.app.db.SetActionTriggers(newID, triggers); err != nil {
+			// Action row exists but triggers failed — keep the action so
+			// user can re-save triggers via Edit instead of losing their
+			// config input. Surface the partial result as an error.
+			http.Error(w, "action created but saving triggers failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	w.Header().Set("HX-Redirect", "/actions")
@@ -707,7 +1181,11 @@ func (s *Server) handleUIUpdateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Merge masked secrets with existing encrypted values
 	merged := mergeSecretFields(configJSON, existing.ConfigJSON, executor.SecretFields())
 
@@ -727,8 +1205,48 @@ func (s *Server) handleUIUpdateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if triggers, err := parseTriggersForm(r, id); err != nil {
+		http.Error(w, "invalid triggers: "+err.Error(), http.StatusBadRequest)
+		return
+	} else if err := s.app.db.SetActionTriggers(id, triggers); err != nil {
+		http.Error(w, "failed to save triggers: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// No dispatcher.Reload(): scheduled checks call GetLinkedActions live
+	// on every event, so trigger changes take effect on the next check
+	// cycle without a reload.
+
 	w.Header().Set("HX-Redirect", "/actions")
 	w.WriteHeader(http.StatusOK)
+}
+
+// parseTriggersForm reads the triggers_json hidden field into []ActionTrigger.
+// Empty / missing is valid (no triggers = action is dormant).
+func parseTriggersForm(r *http.Request, actionID int64) ([]ActionTrigger, error) {
+	raw := strings.TrimSpace(r.FormValue("triggers_json"))
+	if raw == "" {
+		return nil, nil
+	}
+	var rows []struct {
+		WANInterfaceID int64  `json:"wan_interface_id"`
+		TriggerOn      string `json:"trigger_on"`
+	}
+	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
+		return nil, fmt.Errorf("parsing triggers: %w", err)
+	}
+	out := make([]ActionTrigger, 0, len(rows))
+	for i, t := range rows {
+		if t.WANInterfaceID == 0 {
+			continue
+		}
+		out = append(out, ActionTrigger{
+			ActionID:       actionID,
+			WANInterfaceID: t.WANInterfaceID,
+			TriggerOn:      t.TriggerOn,
+			RunOrder:       i,
+		})
+	}
+	return out, nil
 }
 
 func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -764,6 +1282,19 @@ func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) 
 
 // --- Helpers ---
 
+// buildActionConfig picks the right form-to-JSON strategy for an executor.
+// Executors that implement the optional formParser interface (e.g.
+// Cloudflare DNS with its repeater) get their custom parsing; everyone
+// else falls back to the generic schema-driven reader.
+func buildActionConfig(r *http.Request, executor ActionExecutor) (json.RawMessage, error) {
+	if cp, ok := executor.(interface {
+		ParseForm(url.Values) (json.RawMessage, error)
+	}); ok {
+		return cp.ParseForm(r.PostForm)
+	}
+	return buildConfigFromForm(r, executor.ConfigSchema()), nil
+}
+
 func buildConfigFromForm(r *http.Request, schema []ConfigField) json.RawMessage {
 	config := make(map[string]interface{})
 	for _, field := range schema {
@@ -788,8 +1319,8 @@ func buildConfigFromForm(r *http.Request, schema []ConfigField) json.RawMessage 
 
 func parseHistoryFilter(r *http.Request) HistoryFilter {
 	f := HistoryFilter{Limit: 50}
-	if v := r.URL.Query().Get("source"); v != "" {
-		f.SourceID, _ = strconv.ParseInt(v, 10, 64)
+	if v := r.URL.Query().Get("wan_interface"); v != "" {
+		f.WANInterfaceID, _ = strconv.ParseInt(v, 10, 64)
 	}
 	f.EventType = r.URL.Query().Get("event")
 	f.Status = r.URL.Query().Get("status")
@@ -803,6 +1334,76 @@ func parseHistoryFilter(r *http.Request) HistoryFilter {
 		}
 	}
 	return f
+}
+
+// tupleOwnedBySavedWAN reports whether any saved WAN interface owns the given
+// gateway-mode tuple (interface name + gateway). Used by Test Route to avoid
+// racing with scheduled checks that manage the same PBR rule.
+func (s *Server) tupleOwnedBySavedWAN(ifaceName, gateway string) bool {
+	wanInterfaces, err := s.app.db.ListWANInterfaces()
+	if err != nil {
+		return false
+	}
+	for _, wi := range wanInterfaces {
+		if !wi.Enabled {
+			continue
+		}
+		wi.Config.MigrateEgress()
+		if wi.Config.Egress.Mode == "gateway" &&
+			wi.Config.Egress.InterfaceName == ifaceName &&
+			wi.Config.Egress.Gateway == gateway {
+			return true
+		}
+	}
+	return false
+}
+
+// firstProbeURL returns the first non-empty line from a probe_urls textarea value.
+func firstProbeURL(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		if s := strings.TrimSpace(line); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// scheduleFromForm builds a cron string from the form. The form submits
+// either schedule_mode=simple with schedule_value + schedule_unit, or
+// schedule_mode=cron with schedule_cron (used only when the existing cron
+// could not be parsed into the simple dropdown).
+func scheduleFromForm(r *http.Request) (string, error) {
+	mode := r.FormValue("schedule_mode")
+	if mode == "cron" {
+		raw := strings.TrimSpace(r.FormValue("schedule_cron"))
+		if raw == "" {
+			return "", fmt.Errorf("cron expression is required")
+		}
+		return raw, nil
+	}
+	valueStr := r.FormValue("schedule_value")
+	unit := r.FormValue("schedule_unit")
+	if valueStr == "" || unit == "" {
+		return "*/5 * * * *", nil
+	}
+	v, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return "", fmt.Errorf("schedule_value must be a number")
+	}
+	return ScheduleFromSimple(v, unit)
+}
+
+func parseEgressForm(r *http.Request) EgressConfig {
+	mode := r.FormValue("egress_mode")
+	if mode == "" {
+		mode = "default"
+	}
+	return EgressConfig{
+		Mode:          mode,
+		InterfaceName: r.FormValue("egress_interface"),
+		Gateway:       r.FormValue("egress_gateway"),
+		ProxyURL:      r.FormValue("egress_proxy_url"),
+	}
 }
 
 func parseLines(s string) []string {

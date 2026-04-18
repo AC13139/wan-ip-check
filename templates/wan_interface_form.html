@@ -1,0 +1,167 @@
+{{define "content"}}
+<form {{if .IsEdit}}hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}"{{else}}hx-post="/ui/wan-interfaces"{{end}}
+      hx-target="body">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Basic</h3>
+    <div class="form-group">
+      <label class="form-label">Name</label>
+      <input type="text" name="name" class="form-input" required
+             value="{{if .IsEdit}}{{.WANInterface.Name}}{{end}}"
+             placeholder="e.g., Home Gateway">
+    </div>
+    {{if .IsEdit}}
+    <div class="form-group">
+      <label class="form-label">Enabled</label>
+      <label class="toggle">
+        <input type="checkbox" name="enabled" value="true" {{if .WANInterface.Enabled}}checked{{end}}>
+        <span class="toggle-track"></span>
+        <span class="toggle-thumb"></span>
+      </label>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Schedule</h3>
+    {{if .CustomSchedule}}
+    <div class="form-group">
+      <label class="form-label">Cron Expression (custom)</label>
+      <input type="text" name="schedule_cron" class="form-input mono"
+             value="{{.WANInterface.Schedule}}">
+      <div class="form-help">Current schedule is not expressible as a simple interval; editing the raw cron string.</div>
+    </div>
+    <input type="hidden" name="schedule_mode" value="cron">
+    {{else}}
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Check every</label>
+        <input type="number" name="schedule_value" class="form-input" required
+               min="1" value="{{.ScheduleValue}}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Unit</label>
+        <select name="schedule_unit" class="form-select">
+          <option value="minutes" {{if eq .ScheduleUnit "minutes"}}selected{{end}}>Minutes</option>
+          <option value="hours" {{if eq .ScheduleUnit "hours"}}selected{{end}}>Hours</option>
+          <option value="days" {{if eq .ScheduleUnit "days"}}selected{{end}}>Days</option>
+        </select>
+      </div>
+    </div>
+    <input type="hidden" name="schedule_mode" value="simple">
+    {{end}}
+  </div>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">IP Detection</h3>
+    <div class="form-group">
+      <label class="form-label">Probe URLs (one per line, tried in order)</label>
+      <textarea name="probe_urls" class="form-textarea mono" rows="4"
+                placeholder="https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip">{{if .IsEdit}}{{range .WANInterface.Config.ProbeURLs}}{{.}}&#10;{{end}}{{else}}https://api.ipify.org&#10;https://checkip.amazonaws.com&#10;https://ifconfig.me/ip{{end}}</textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Strategy</label>
+        <select name="strategy" class="form-select">
+          <option value="fallback" {{if and .IsEdit (eq .WANInterface.Config.Strategy "fallback")}}selected{{end}}>Fallback (try in order)</option>
+          <option value="single" {{if and .IsEdit (eq .WANInterface.Config.Strategy "single")}}selected{{end}}>Single (first URL only)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Timeout (seconds)</label>
+        <input type="number" name="timeout" class="form-input"
+               value="{{if .IsEdit}}{{.WANInterface.Config.TimeoutSecs}}{{else}}10{{end}}"
+               min="1" max="60">
+      </div>
+    </div>
+  </div>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Network / Egress</h3>
+
+    <div id="network-diagnostics-panel"
+         hx-get="/ui/network-diagnostics"
+         hx-trigger="load"
+         hx-target="this"
+         hx-swap="outerHTML">
+      <div class="diagnostics-panel diagnostics-loading">
+        <span class="diag-label">Detecting network environment…</span>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Routing Method</label>
+      <select name="egress_mode" class="form-select" id="egress-mode-select">
+        <option value="default" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "default")}}selected{{end}}>Default route</option>
+        <option value="gateway" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "gateway")}}selected{{end}}>Specific gateway (requires NET_ADMIN)</option>
+        <option value="proxy" {{if and .IsEdit (eq .WANInterface.Config.Egress.Mode "proxy")}}selected{{end}}>HTTP proxy</option>
+      </select>
+    </div>
+    <div id="egress-fields">
+      {{.EgressFields}}
+    </div>
+    <script>
+      (function () {
+        var sel = document.getElementById('egress-mode-select');
+        var wrap = document.getElementById('egress-fields');
+        if (!sel || !wrap) return;
+        function apply() {
+          wrap.querySelectorAll('[data-egress-mode]').forEach(function (el) {
+            var active = el.getAttribute('data-egress-mode') === sel.value;
+            el.style.display = active ? '' : 'none';
+            // Disable inputs in hidden panels so they do not submit or trigger required-validation.
+            el.querySelectorAll('input, select, textarea').forEach(function (inp) {
+              inp.disabled = !active;
+            });
+          });
+        }
+        sel.addEventListener('change', apply);
+        apply();
+      })();
+    </script>
+
+    <div class="test-route-wrap">
+      <button type="button" class="btn btn-secondary btn-sm"
+              hx-post="/ui/test-route"
+              hx-target="#test-route-result"
+              hx-swap="innerHTML"
+              hx-include="closest form"
+              hx-indicator="#test-route-spinner">
+        Test Route
+      </button>
+      <span id="test-route-spinner" class="htmx-indicator test-route-spinner">Testing…</span>
+      <span id="test-route-result" class="test-route-result"></span>
+    </div>
+  </div>
+
+  {{if .IsEdit}}
+  <div class="card mb-lg">
+    <h3 class="section-title">Linked Actions</h3>
+    {{if .AllActions}}
+    {{range .AllActions}}
+    <div class="flex-center gap-md mb-sm">
+      <input type="checkbox" name="action_ids" value="{{.ID}}"
+             {{if index $.LinkedIDs .ID}}checked{{end}}>
+      <span>{{.Name}}</span>
+      <span class="type-label">{{.Type}}</span>
+      {{$trigger := index $.LinkedTriggers .ID}}
+      <select name="trigger_{{.ID}}" class="form-select" style="width:auto;padding:4px 24px 4px 8px;font-size:12px">
+        <option value="ip_changed" {{if eq $trigger "ip_changed"}}selected{{end}}>ip_changed</option>
+        <option value="ip_unchanged_daily" {{if eq $trigger "ip_unchanged_daily"}}selected{{end}}>daily_summary</option>
+        <option value="both" {{if eq $trigger "both"}}selected{{end}}>both</option>
+      </select>
+    </div>
+    {{end}}
+    {{else}}
+    <p class="text-muted">No actions available. <a href="/actions/new">Create one first.</a></p>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div class="flex gap-sm">
+    <button type="submit" class="btn btn-primary">{{if .IsEdit}}Save Changes{{else}}Create WAN Interface{{end}}</button>
+    <a href="/wan-interfaces" class="btn btn-secondary">Cancel</a>
+  </div>
+</form>
+{{end}}

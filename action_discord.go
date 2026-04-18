@@ -27,6 +27,12 @@ type discordConfig struct {
 
 func (e *DiscordExecutor) Type() string { return "discord" }
 
+func (e *DiscordExecutor) DisplayName() string { return "Discord Webhook" }
+
+func (e *DiscordExecutor) Description() string {
+	return "Post a rich-embed notification to a Discord channel when the WAN IP changes (or as a daily summary)."
+}
+
 func (e *DiscordExecutor) SecretFields() []string { return []string{"webhook_url"} }
 
 func (e *DiscordExecutor) DefaultConfig() json.RawMessage {
@@ -36,8 +42,12 @@ func (e *DiscordExecutor) DefaultConfig() json.RawMessage {
 
 func (e *DiscordExecutor) ConfigSchema() []ConfigField {
 	return []ConfigField{
-		{Name: "webhook_url", Label: "Webhook URL", Type: "password", Required: true, IsSecret: true, HelpText: "Discord webhook URL (Settings > Integrations > Webhooks)"},
-		{Name: "proxy_url", Label: "Proxy URL", Type: "text", Required: false, HelpText: "HTTP proxy for Discord access (set via DISCORD_PROXY env var)"},
+		{Name: "webhook_url", Label: "Webhook URL", Type: "password", Required: true, IsSecret: true,
+			Placeholder: "https://discord.com/api/webhooks/...",
+			HelpText:    "Discord channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy URL."},
+		{Name: "proxy_url", Label: "Proxy URL (optional)", Type: "text", Required: false,
+			Placeholder: "http://proxy-host:3128",
+			HelpText:    "HTTP proxy for regions where Discord is blocked. Usually set globally via DISCORD_PROXY env var."},
 	}
 }
 
@@ -85,7 +95,8 @@ func (e *DiscordExecutor) postWebhook(ctx context.Context, webhookURL string, pa
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("sending webhook: %w", err)
+		// Sanitize error to avoid leaking webhook URL/token
+		return fmt.Errorf("sending Discord webhook failed (check proxy and webhook URL)")
 	}
 	defer resp.Body.Close()
 
@@ -124,7 +135,7 @@ type embedFooter struct {
 
 func buildChangePayload(event IPEvent) discordPayload {
 	fields := []embedField{
-		{Name: "Source", Value: event.SourceName, Inline: true},
+		{Name: "WAN Interface", Value: event.WANInterfaceName, Inline: true},
 		{Name: "Old IP", Value: event.OldIP, Inline: true},
 		{Name: "New IP", Value: "**" + event.NewIP + "**", Inline: true},
 	}
@@ -148,7 +159,7 @@ func buildSummaryPayload(event IPEvent) discordPayload {
 		AvatarURL: avatarURL,
 		Embeds: []discordEmbed{{
 			Title:       ":white_check_mark: Daily IP Summary: No Change",
-			Description: fmt.Sprintf("Source **%s**: IP address remains **%s**.", event.SourceName, event.NewIP),
+			Description: fmt.Sprintf("WAN Interface **%s**: IP address remains **%s**.", event.WANInterfaceName, event.NewIP),
 			Color:       colorGreen,
 			Fields: []embedField{
 				{Name: "Current IP", Value: "**" + event.NewIP + "**", Inline: false},

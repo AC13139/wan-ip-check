@@ -1,0 +1,125 @@
+{{define "cloudflare-dns-fields"}}
+<div class="form-group">
+  <label class="form-label">API Token *</label>
+  <input type="password" name="api_token" id="cf-api-token" class="form-input mono"
+         value="{{with .api_token}}{{.}}{{end}}"
+         placeholder="cloudflare-api-token" required
+         title="Create at dash.cloudflare.com → Profile → API Tokens. Requires Zone:Read + DNS:Edit permissions.">
+  <div class="form-help">Create at <span class="mono">dash.cloudflare.com → Profile → API Tokens</span>. Requires <strong>Zone:Read</strong> + <strong>DNS:Edit</strong>.</div>
+</div>
+
+<div class="form-group">
+  <label class="form-label">Zone *</label>
+  <div class="cf-zone-row">
+    <select name="zone_id" id="cf-zone-select" class="form-select" required>
+      {{if .zone_id}}<option value="{{.zone_id}}" selected data-zone-name="{{.zone_name}}">{{with .zone_name}}{{.}}{{else}}{{$.zone_id}}{{end}}</option>{{else}}<option value="">Click "Load Zones"</option>{{end}}
+    </select>
+    <button type="button" class="btn btn-secondary btn-sm"
+            hx-post="/ui/cloudflare/zones"
+            hx-target="#cf-zone-select"
+            hx-swap="innerHTML"
+            hx-include="#cf-api-token, [name='zone_id'], [name='action_id']"
+            hx-disabled-elt="this">Load Zones</button>
+  </div>
+  <input type="hidden" name="zone_name" id="cf-zone-name" value="{{with .zone_name}}{{.}}{{end}}">
+  <div class="form-help">Click <strong>Load Zones</strong> after entering the token. Shows every zone the token can read.</div>
+</div>
+
+<div class="form-group">
+  <label class="form-label">DNS Records *</label>
+  <div id="cf-records-list" class="cf-records-list"></div>
+  <input type="hidden" name="records_json" id="cf-records-json" value='{{with .records_json}}{{.}}{{else}}[]{{end}}'>
+  <button type="button" id="cf-add-record" class="btn btn-secondary btn-sm">+ Add Record</button>
+  <div class="form-help">
+    Name examples: <span class="mono">@</span> (zone root) &middot; <span class="mono">*</span> (wildcard — does not cover apex) &middot; <span class="mono">api</span> &middot; <span class="mono">api.example.com</span>.
+    Missing records are created automatically on the next IP update. Proxied (orange cloud) routes through Cloudflare; disable it for DDNS that needs your real IP reachable.
+  </div>
+</div>
+
+{{if .legacy_record_ids}}
+<div class="cf-legacy-banner" role="alert">
+  <strong>Legacy configuration detected.</strong>
+  This action was created with raw record IDs: <span class="mono">{{.legacy_record_ids}}</span>.
+  Add records above with their names + Proxied preference, then save to migrate. The legacy record IDs will keep working until you save.
+</div>
+{{end}}
+
+<template id="cf-record-row-tpl">
+  <div class="cf-record-row">
+    <input type="text" class="form-input record-name" placeholder="@, *, api, api.example.com"
+           title="Record name — use @ for the zone root, * for wildcard, or a short/fully-qualified name.">
+    <label class="cf-proxied-toggle">
+      <input type="checkbox" class="record-proxied"
+             title="Proxied (orange cloud): traffic flows through Cloudflare. Unchecked (grey): DNS-only, direct to your origin.">
+      <span class="cf-proxied-label">Proxied</span>
+    </label>
+    <button type="button" class="btn btn-sm btn-danger record-remove" title="Remove this record">×</button>
+  </div>
+</template>
+
+<script>
+(function () {
+  var list = document.getElementById('cf-records-list');
+  var hidden = document.getElementById('cf-records-json');
+  var addBtn = document.getElementById('cf-add-record');
+  var tpl = document.getElementById('cf-record-row-tpl');
+  var zoneSelect = document.getElementById('cf-zone-select');
+  var zoneNameHidden = document.getElementById('cf-zone-name');
+  if (!list || !hidden || !addBtn || !tpl) return;
+
+  function serialize() {
+    var rows = list.querySelectorAll('.cf-record-row');
+    var data = [];
+    rows.forEach(function (row) {
+      var name = row.querySelector('.record-name').value.trim();
+      if (!name) return;
+      data.push({name: name, proxied: row.querySelector('.record-proxied').checked});
+    });
+    hidden.value = JSON.stringify(data);
+  }
+
+  function wireRow(row) {
+    row.querySelectorAll('.record-name, .record-proxied').forEach(function (el) {
+      el.addEventListener('input', serialize);
+      el.addEventListener('change', serialize);
+    });
+    row.querySelector('.record-remove').addEventListener('click', function () {
+      row.remove();
+      serialize();
+    });
+  }
+
+  function addRow(rec) {
+    var node = tpl.content.cloneNode(true);
+    var row = node.querySelector('.cf-record-row');
+    if (rec) {
+      row.querySelector('.record-name').value = rec.name || '';
+      row.querySelector('.record-proxied').checked = !!rec.proxied;
+    }
+    wireRow(row);
+    list.appendChild(node);
+  }
+
+  // Hydrate from initial records_json
+  try {
+    var initial = JSON.parse(hidden.value || '[]');
+    if (Array.isArray(initial)) initial.forEach(addRow);
+  } catch (e) { /* ignore */ }
+
+  addBtn.addEventListener('click', function () {
+    addRow();
+    serialize();
+  });
+
+  // Keep zone_name in sync when user picks from the dropdown (data-zone-name on options)
+  if (zoneSelect && zoneNameHidden) {
+    zoneSelect.addEventListener('change', function () {
+      var opt = zoneSelect.options[zoneSelect.selectedIndex];
+      zoneNameHidden.value = opt ? (opt.getAttribute('data-zone-name') || '') : '';
+    });
+  }
+
+  serialize();
+})();
+</script>
+{{end}}

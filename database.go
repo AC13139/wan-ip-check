@@ -48,8 +48,103 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) migrate() error {
-	_, err := db.conn.Exec(schema)
-	return err
+	if err := db.renameAlphaSchema(); err != nil {
+		return fmt.Errorf("renaming alpha schema: %w", err)
+	}
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+	return nil
+}
+
+// renameAlphaSchema migrates v2.0.0-alpha databases (tables: sources,
+// source_state, source_actions; columns: source_id) to the current beta
+// schema (wan_interfaces, wan_interface_state, wan_interface_actions;
+// wan_interface_id). Idempotent — safe to run on already-migrated DBs.
+func (db *DB) renameAlphaSchema() error {
+	tableExists := func(name string) (bool, error) {
+		var n string
+		err := db.conn.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+			name,
+		).Scan(&n)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return err == nil, err
+	}
+	columnExists := func(table, column string) (bool, error) {
+		var n string
+		err := db.conn.QueryRow(
+			"SELECT name FROM pragma_table_info(?) WHERE name = ?",
+			table, column,
+		).Scan(&n)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return err == nil, err
+	}
+
+	hasSources, err := tableExists("sources")
+	if err != nil {
+		return err
+	}
+	hasSourceState, err := tableExists("source_state")
+	if err != nil {
+		return err
+	}
+	hasSourceActions, err := tableExists("source_actions")
+	if err != nil {
+		return err
+	}
+	actionRunsHasSourceID, err := columnExists("action_runs", "source_id")
+	if err != nil {
+		return err
+	}
+
+	if !hasSources && !hasSourceState && !hasSourceActions && !actionRunsHasSourceID {
+		return nil
+	}
+
+	db.logger.Info("migrating alpha schema to wan_interface tables",
+		"sources", hasSources, "source_state", hasSourceState,
+		"source_actions", hasSourceActions, "action_runs.source_id", actionRunsHasSourceID)
+
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var stmts []string
+	if hasSources {
+		stmts = append(stmts, "ALTER TABLE sources RENAME TO wan_interfaces")
+	}
+	if hasSourceState {
+		stmts = append(stmts,
+			"ALTER TABLE source_state RENAME TO wan_interface_state",
+			"ALTER TABLE wan_interface_state RENAME COLUMN source_id TO wan_interface_id",
+		)
+	}
+	if hasSourceActions {
+		stmts = append(stmts,
+			"ALTER TABLE source_actions RENAME TO wan_interface_actions",
+			"ALTER TABLE wan_interface_actions RENAME COLUMN source_id TO wan_interface_id",
+		)
+	}
+	if actionRunsHasSourceID {
+		stmts = append(stmts,
+			"ALTER TABLE action_runs RENAME COLUMN source_id TO wan_interface_id",
+			"DROP INDEX IF EXISTS idx_action_runs_source",
+		)
+	}
+
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("%q: %w", s, err)
+		}
+	}
+	return tx.Commit()
 }
 
 const schema = `
@@ -58,7 +153,7 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS sources (
+CREATE TABLE IF NOT EXISTS wan_interfaces (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL,
     enabled    INTEGER NOT NULL DEFAULT 1,
@@ -69,8 +164,8 @@ CREATE TABLE IF NOT EXISTS sources (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS source_state (
-    source_id            INTEGER PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS wan_interface_state (
+    wan_interface_id     INTEGER PRIMARY KEY REFERENCES wan_interfaces(id) ON DELETE CASCADE,
     last_observed_ip     TEXT,
     last_check_at        DATETIME,
     last_success_at      DATETIME,
@@ -91,31 +186,70 @@ CREATE TABLE IF NOT EXISTS actions (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS source_actions (
-    source_id  INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-    action_id  INTEGER NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS wan_interface_actions (
+    wan_interface_id  INTEGER NOT NULL REFERENCES wan_interfaces(id) ON DELETE CASCADE,
+    action_id         INTEGER NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
     trigger_on TEXT NOT NULL DEFAULT 'ip_changed',
     run_order  INTEGER NOT NULL DEFAULT 0,
     enabled    INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (source_id, action_id)
+    PRIMARY KEY (wan_interface_id, action_id)
 );
 
 CREATE TABLE IF NOT EXISTS action_runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_id   INTEGER NOT NULL REFERENCES sources(id),
-    action_id   INTEGER NOT NULL REFERENCES actions(id),
-    event_type  TEXT NOT NULL,
-    old_ip      TEXT,
-    new_ip      TEXT,
-    status      TEXT NOT NULL,
-    needs_retry INTEGER NOT NULL DEFAULT 0,
-    error_msg   TEXT,
-    executed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    wan_interface_id  INTEGER NOT NULL REFERENCES wan_interfaces(id),
+    action_id        INTEGER NOT NULL REFERENCES actions(id),
+    event_type       TEXT NOT NULL,
+    old_ip           TEXT,
+    new_ip           TEXT,
+    status           TEXT NOT NULL,
+    needs_retry      INTEGER NOT NULL DEFAULT 0,
+    error_msg        TEXT,
+    executed_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_action_runs_source ON action_runs(source_id, executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_action_runs_wan_interface ON action_runs(wan_interface_id, executed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_runs_needs_retry ON action_runs(needs_retry) WHERE needs_retry = 1;
+
+CREATE TABLE IF NOT EXISTS wan_interface_checks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    wan_interface_id  INTEGER NOT NULL REFERENCES wan_interfaces(id) ON DELETE CASCADE,
+    trigger           TEXT NOT NULL,              -- 'scheduled' or 'manual'
+    status            TEXT NOT NULL,              -- 'ok', 'changed', 'failed'
+    observed_ip       TEXT,
+    previous_ip       TEXT,
+    error_msg         TEXT,
+    executed_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_wan_interface_checks_wi ON wan_interface_checks(wan_interface_id, executed_at DESC);
 `
+
+// --- WAN Interface Checks (audit log of every IP probe) ---
+
+// WANInterfaceCheck records a single IP-probe outcome. Unlike ActionRun
+// (which logs action executions triggered by an event), this records every
+// check — scheduled or manual — including ones where the IP did not change.
+type WANInterfaceCheck struct {
+	ID             int64
+	WANInterfaceID int64
+	Trigger        string // "scheduled" | "manual"
+	Status         string // "ok" | "changed" | "failed"
+	ObservedIP     string
+	PreviousIP     string
+	ErrorMsg       string
+	ExecutedAt     time.Time
+}
+
+func (db *DB) LogWANInterfaceCheck(c *WANInterfaceCheck) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO wan_interface_checks
+		 (wan_interface_id, trigger, status, observed_ip, previous_ip, error_msg)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		c.WANInterfaceID, c.Trigger, c.Status,
+		nullStr(c.ObservedIP), nullStr(c.PreviousIP), nullStr(c.ErrorMsg),
+	)
+	return err
+}
 
 // --- Settings ---
 
@@ -136,12 +270,12 @@ func (db *DB) SetSetting(key, value string) error {
 	return err
 }
 
-// --- Sources ---
+// --- WAN Interfaces ---
 
-func (db *DB) CreateSource(s *Source) (int64, error) {
-	configJSON, err := json.Marshal(s.Config)
+func (db *DB) CreateWANInterface(wi *WANInterface) (int64, error) {
+	configJSON, err := json.Marshal(wi.Config)
 	if err != nil {
-		return 0, fmt.Errorf("marshaling source config: %w", err)
+		return 0, fmt.Errorf("marshaling WAN interface config: %w", err)
 	}
 
 	tx, err := db.conn.Begin()
@@ -151,123 +285,123 @@ func (db *DB) CreateSource(s *Source) (int64, error) {
 	defer tx.Rollback()
 
 	result, err := tx.Exec(
-		"INSERT INTO sources (name, enabled, schedule, timezone, config) VALUES (?, ?, ?, ?, ?)",
-		s.Name, s.Enabled, s.Schedule, s.Timezone, string(configJSON),
+		"INSERT INTO wan_interfaces (name, enabled, schedule, timezone, config) VALUES (?, ?, ?, ?, ?)",
+		wi.Name, wi.Enabled, wi.Schedule, wi.Timezone, string(configJSON),
 	)
 	if err != nil {
 		return 0, err
 	}
 	id, _ := result.LastInsertId()
 
-	if _, err := tx.Exec("INSERT INTO source_state (source_id) VALUES (?)", id); err != nil {
-		return 0, fmt.Errorf("creating source state: %w", err)
+	if _, err := tx.Exec("INSERT INTO wan_interface_state (wan_interface_id) VALUES (?)", id); err != nil {
+		return 0, fmt.Errorf("creating WAN interface state: %w", err)
 	}
 
 	return id, tx.Commit()
 }
 
-func (db *DB) GetSource(id int64) (*Source, error) {
-	s := &Source{}
+func (db *DB) GetWANInterface(id int64) (*WANInterface, error) {
+	wi := &WANInterface{}
 	var configJSON string
 	err := db.conn.QueryRow(
-		"SELECT id, name, enabled, schedule, timezone, config, created_at, updated_at FROM sources WHERE id = ?", id,
-	).Scan(&s.ID, &s.Name, &s.Enabled, &s.Schedule, &s.Timezone, &configJSON, &s.CreatedAt, &s.UpdatedAt)
+		"SELECT id, name, enabled, schedule, timezone, config, created_at, updated_at FROM wan_interfaces WHERE id = ?", id,
+	).Scan(&wi.ID, &wi.Name, &wi.Enabled, &wi.Schedule, &wi.Timezone, &configJSON, &wi.CreatedAt, &wi.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(configJSON), &s.Config); err != nil {
-		return nil, fmt.Errorf("parsing source config: %w", err)
+	if err := json.Unmarshal([]byte(configJSON), &wi.Config); err != nil {
+		return nil, fmt.Errorf("parsing WAN interface config: %w", err)
 	}
-	return s, nil
+	return wi, nil
 }
 
-func (db *DB) ListSources() ([]Source, error) {
+func (db *DB) ListWANInterfaces() ([]WANInterface, error) {
 	rows, err := db.conn.Query(
-		"SELECT id, name, enabled, schedule, timezone, config, created_at, updated_at FROM sources ORDER BY id",
+		"SELECT id, name, enabled, schedule, timezone, config, created_at, updated_at FROM wan_interfaces ORDER BY id",
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var sources []Source
+	var wanInterfaces []WANInterface
 	for rows.Next() {
-		var s Source
+		var wi WANInterface
 		var configJSON string
-		if err := rows.Scan(&s.ID, &s.Name, &s.Enabled, &s.Schedule, &s.Timezone, &configJSON, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&wi.ID, &wi.Name, &wi.Enabled, &wi.Schedule, &wi.Timezone, &configJSON, &wi.CreatedAt, &wi.UpdatedAt); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(configJSON), &s.Config); err != nil {
-			db.logger.Warn("invalid source config JSON", "source_id", s.ID, "error", err)
+		if err := json.Unmarshal([]byte(configJSON), &wi.Config); err != nil {
+			db.logger.Warn("invalid WAN interface config JSON", "wan_interface_id", wi.ID, "error", err)
 		}
-		sources = append(sources, s)
+		wanInterfaces = append(wanInterfaces, wi)
 	}
-	return sources, rows.Err()
+	return wanInterfaces, rows.Err()
 }
 
-func (db *DB) UpdateSource(s *Source) error {
-	configJSON, err := json.Marshal(s.Config)
+func (db *DB) UpdateWANInterface(wi *WANInterface) error {
+	configJSON, err := json.Marshal(wi.Config)
 	if err != nil {
-		return fmt.Errorf("marshaling source config: %w", err)
+		return fmt.Errorf("marshaling WAN interface config: %w", err)
 	}
 	_, err = db.conn.Exec(
-		"UPDATE sources SET name = ?, enabled = ?, schedule = ?, timezone = ?, config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		s.Name, s.Enabled, s.Schedule, s.Timezone, string(configJSON), s.ID,
+		"UPDATE wan_interfaces SET name = ?, enabled = ?, schedule = ?, timezone = ?, config = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		wi.Name, wi.Enabled, wi.Schedule, wi.Timezone, string(configJSON), wi.ID,
 	)
 	return err
 }
 
-func (db *DB) DeleteSource(id int64) error {
-	_, err := db.conn.Exec("DELETE FROM sources WHERE id = ?", id)
+func (db *DB) DeleteWANInterface(id int64) error {
+	_, err := db.conn.Exec("DELETE FROM wan_interfaces WHERE id = ?", id)
 	return err
 }
 
-// --- Source State ---
+// --- WAN Interface State ---
 
-func (db *DB) GetSourceState(sourceID int64) (*SourceState, error) {
-	ss := &SourceState{SourceID: sourceID}
+func (db *DB) GetWANInterfaceState(wanInterfaceID int64) (*WANInterfaceState, error) {
+	ws := &WANInterfaceState{WANInterfaceID: wanInterfaceID}
 	var lastIP, lastCheck, lastSuccess, lastStatus, nextRun, summaryDate, lastErr sql.NullString
 	err := db.conn.QueryRow(
 		`SELECT last_observed_ip, last_check_at, last_success_at, last_status,
 		        consecutive_failures, next_run_at, last_summary_date, last_error
-		 FROM source_state WHERE source_id = ?`, sourceID,
+		 FROM wan_interface_state WHERE wan_interface_id = ?`, wanInterfaceID,
 	).Scan(&lastIP, &lastCheck, &lastSuccess, &lastStatus,
-		&ss.ConsecutiveFailures, &nextRun, &summaryDate, &lastErr)
+		&ws.ConsecutiveFailures, &nextRun, &summaryDate, &lastErr)
 	if err != nil {
 		return nil, err
 	}
-	ss.LastObservedIP = lastIP.String
-	ss.LastStatus = lastStatus.String
-	ss.LastSummaryDate = summaryDate.String
-	ss.LastError = lastErr.String
+	ws.LastObservedIP = lastIP.String
+	ws.LastStatus = lastStatus.String
+	ws.LastSummaryDate = summaryDate.String
+	ws.LastError = lastErr.String
 	if lastCheck.Valid {
-		ss.LastCheckAt, _ = time.Parse(time.DateTime, lastCheck.String)
+		ws.LastCheckAt, _ = time.Parse(time.DateTime, lastCheck.String)
 	}
 	if lastSuccess.Valid {
-		ss.LastSuccessAt, _ = time.Parse(time.DateTime, lastSuccess.String)
+		ws.LastSuccessAt, _ = time.Parse(time.DateTime, lastSuccess.String)
 	}
 	if nextRun.Valid {
-		ss.NextRunAt, _ = time.Parse(time.DateTime, nextRun.String)
+		ws.NextRunAt, _ = time.Parse(time.DateTime, nextRun.String)
 	}
-	return ss, nil
+	return ws, nil
 }
 
-func (db *DB) UpdateSourceState(ss *SourceState) error {
+func (db *DB) UpdateWANInterfaceState(ws *WANInterfaceState) error {
 	_, err := db.conn.Exec(
-		`UPDATE source_state SET
+		`UPDATE wan_interface_state SET
 		    last_observed_ip = ?, last_check_at = ?, last_success_at = ?,
 		    last_status = ?, consecutive_failures = ?, next_run_at = ?,
 		    last_summary_date = ?, last_error = ?
-		 WHERE source_id = ?`,
-		nullStr(ss.LastObservedIP),
-		nullTime(ss.LastCheckAt),
-		nullTime(ss.LastSuccessAt),
-		nullStr(ss.LastStatus),
-		ss.ConsecutiveFailures,
-		nullTime(ss.NextRunAt),
-		nullStr(ss.LastSummaryDate),
-		nullStr(ss.LastError),
-		ss.SourceID,
+		 WHERE wan_interface_id = ?`,
+		nullStr(ws.LastObservedIP),
+		nullTime(ws.LastCheckAt),
+		nullTime(ws.LastSuccessAt),
+		nullStr(ws.LastStatus),
+		ws.ConsecutiveFailures,
+		nullTime(ws.NextRunAt),
+		nullStr(ws.LastSummaryDate),
+		nullStr(ws.LastError),
+		ws.WANInterfaceID,
 	)
 	return err
 }
@@ -333,40 +467,114 @@ func (db *DB) DeleteAction(id int64) error {
 	return err
 }
 
-// --- Source Actions (links) ---
+// --- WAN Interface Actions (links) ---
 
-func (db *DB) LinkAction(sa *SourceAction) error {
+func (db *DB) LinkAction(wia *WANInterfaceAction) error {
 	_, err := db.conn.Exec(
-		`INSERT INTO source_actions (source_id, action_id, trigger_on, run_order, enabled)
+		`INSERT INTO wan_interface_actions (wan_interface_id, action_id, trigger_on, run_order, enabled)
 		 VALUES (?, ?, ?, ?, ?)
-		 ON CONFLICT(source_id, action_id) DO UPDATE SET trigger_on = ?, run_order = ?, enabled = ?`,
-		sa.SourceID, sa.ActionID, sa.TriggerOn, sa.RunOrder, sa.Enabled,
-		sa.TriggerOn, sa.RunOrder, sa.Enabled,
+		 ON CONFLICT(wan_interface_id, action_id) DO UPDATE SET trigger_on = ?, run_order = ?, enabled = ?`,
+		wia.WANInterfaceID, wia.ActionID, wia.TriggerOn, wia.RunOrder, wia.Enabled,
+		wia.TriggerOn, wia.RunOrder, wia.Enabled,
 	)
 	return err
 }
 
-func (db *DB) UnlinkAction(sourceID, actionID int64) error {
+func (db *DB) UnlinkAction(wanInterfaceID, actionID int64) error {
 	_, err := db.conn.Exec(
-		"DELETE FROM source_actions WHERE source_id = ? AND action_id = ?",
-		sourceID, actionID,
+		"DELETE FROM wan_interface_actions WHERE wan_interface_id = ? AND action_id = ?",
+		wanInterfaceID, actionID,
 	)
 	return err
 }
 
-func (db *DB) GetLinkedActions(sourceID int64, triggerOn string) ([]SourceAction, error) {
-	query := `SELECT sa.source_id, sa.action_id, sa.trigger_on, sa.run_order, sa.enabled,
+// ActionTrigger is one row in the Action-form Triggers repeater: a WAN
+// interface that fires this action on a given event. Joined with the WAN
+// name for form rendering.
+type ActionTrigger struct {
+	ActionID         int64
+	WANInterfaceID   int64
+	WANInterfaceName string
+	TriggerOn        string // ip_changed | ip_unchanged_daily | both
+	RunOrder         int
+}
+
+// GetActionTriggers lists the triggers declared for a single action.
+func (db *DB) GetActionTriggers(actionID int64) ([]ActionTrigger, error) {
+	rows, err := db.conn.Query(
+		`SELECT wia.wan_interface_id, COALESCE(wi.name, '?') AS wan_name,
+		        wia.trigger_on, wia.run_order
+		 FROM wan_interface_actions wia
+		 LEFT JOIN wan_interfaces wi ON wi.id = wia.wan_interface_id
+		 WHERE wia.action_id = ?
+		 ORDER BY wia.run_order, wia.wan_interface_id`,
+		actionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActionTrigger
+	for rows.Next() {
+		var t ActionTrigger
+		if err := rows.Scan(&t.WANInterfaceID, &t.WANInterfaceName, &t.TriggerOn, &t.RunOrder); err != nil {
+			return nil, err
+		}
+		t.ActionID = actionID
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SetActionTriggers replaces the complete set of triggers for an action
+// in a single transaction. Triggers not present in the passed slice are
+// removed; matching rows are upserted with the new trigger_on / run_order.
+// WAN-side Linked Actions for other actions are untouched.
+func (db *DB) SetActionTriggers(actionID int64, triggers []ActionTrigger) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM wan_interface_actions WHERE action_id = ?", actionID); err != nil {
+		return fmt.Errorf("clearing existing triggers: %w", err)
+	}
+	for _, t := range triggers {
+		if t.WANInterfaceID == 0 {
+			continue
+		}
+		trigger := t.TriggerOn
+		switch trigger {
+		case "ip_changed", "ip_unchanged_daily", "both":
+		default:
+			trigger = "ip_changed"
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO wan_interface_actions (wan_interface_id, action_id, trigger_on, run_order, enabled)
+			 VALUES (?, ?, ?, ?, 1)
+			 ON CONFLICT(wan_interface_id, action_id) DO UPDATE SET trigger_on = excluded.trigger_on, run_order = excluded.run_order, enabled = 1`,
+			t.WANInterfaceID, actionID, trigger, t.RunOrder,
+		); err != nil {
+			return fmt.Errorf("inserting trigger for wan %d: %w", t.WANInterfaceID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (db *DB) GetLinkedActions(wanInterfaceID int64, triggerOn string) ([]WANInterfaceAction, error) {
+	query := `SELECT wia.wan_interface_id, wia.action_id, wia.trigger_on, wia.run_order, wia.enabled,
 	                 a.type, a.name, a.config
-	          FROM source_actions sa
-	          JOIN actions a ON a.id = sa.action_id
-	          WHERE sa.source_id = ? AND sa.enabled = 1 AND a.enabled = 1`
-	args := []interface{}{sourceID}
+	          FROM wan_interface_actions wia
+	          JOIN actions a ON a.id = wia.action_id
+	          WHERE wia.wan_interface_id = ? AND wia.enabled = 1 AND a.enabled = 1`
+	args := []interface{}{wanInterfaceID}
 
 	if triggerOn != "" {
-		query += " AND (sa.trigger_on = ? OR sa.trigger_on = 'both')"
+		query += " AND (wia.trigger_on = ? OR wia.trigger_on = 'both')"
 		args = append(args, triggerOn)
 	}
-	query += " ORDER BY sa.run_order, sa.action_id"
+	query += " ORDER BY wia.run_order, wia.action_id"
 
 	rows, err := db.conn.Query(query, args...)
 	if err != nil {
@@ -374,16 +582,16 @@ func (db *DB) GetLinkedActions(sourceID int64, triggerOn string) ([]SourceAction
 	}
 	defer rows.Close()
 
-	var links []SourceAction
+	var links []WANInterfaceAction
 	for rows.Next() {
-		var sa SourceAction
+		var wia WANInterfaceAction
 		var configJSON string
-		if err := rows.Scan(&sa.SourceID, &sa.ActionID, &sa.TriggerOn, &sa.RunOrder, &sa.Enabled,
-			&sa.ActionType, &sa.ActionName, &configJSON); err != nil {
+		if err := rows.Scan(&wia.WANInterfaceID, &wia.ActionID, &wia.TriggerOn, &wia.RunOrder, &wia.Enabled,
+			&wia.ActionType, &wia.ActionName, &configJSON); err != nil {
 			return nil, err
 		}
-		sa.ActionConfigJSON = json.RawMessage(configJSON)
-		links = append(links, sa)
+		wia.ActionConfigJSON = json.RawMessage(configJSON)
+		links = append(links, wia)
 	}
 	return links, rows.Err()
 }
@@ -392,23 +600,23 @@ func (db *DB) GetLinkedActions(sourceID int64, triggerOn string) ([]SourceAction
 
 func (db *DB) LogActionRun(run *ActionRun) error {
 	_, err := db.conn.Exec(
-		`INSERT INTO action_runs (source_id, action_id, event_type, old_ip, new_ip, status, needs_retry, error_msg)
+		`INSERT INTO action_runs (wan_interface_id, action_id, event_type, old_ip, new_ip, status, needs_retry, error_msg)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.SourceID, run.ActionID, run.EventType,
+		run.WANInterfaceID, run.ActionID, run.EventType,
 		nullStr(run.OldIP), nullStr(run.NewIP),
 		run.Status, run.NeedsRetry, nullStr(run.ErrorMsg),
 	)
 	return err
 }
 
-func (db *DB) GetRecentRuns(sourceID int64, limit int) ([]ActionRun, error) {
-	query := `SELECT id, source_id, action_id, event_type, old_ip, new_ip, status, needs_retry, error_msg, executed_at
+func (db *DB) GetRecentRuns(wanInterfaceID int64, limit int) ([]ActionRun, error) {
+	query := `SELECT id, wan_interface_id, action_id, event_type, old_ip, new_ip, status, needs_retry, error_msg, executed_at
 	          FROM action_runs`
 	args := []interface{}{}
 
-	if sourceID > 0 {
-		query += " WHERE source_id = ?"
-		args = append(args, sourceID)
+	if wanInterfaceID > 0 {
+		query += " WHERE wan_interface_id = ?"
+		args = append(args, wanInterfaceID)
 	}
 	query += " ORDER BY executed_at DESC LIMIT ?"
 	args = append(args, limit)
@@ -423,7 +631,7 @@ func (db *DB) GetRecentRuns(sourceID int64, limit int) ([]ActionRun, error) {
 	for rows.Next() {
 		var r ActionRun
 		var oldIP, newIP, errMsg sql.NullString
-		if err := rows.Scan(&r.ID, &r.SourceID, &r.ActionID, &r.EventType,
+		if err := rows.Scan(&r.ID, &r.WANInterfaceID, &r.ActionID, &r.EventType,
 			&oldIP, &newIP, &r.Status, &r.NeedsRetry, &errMsg, &r.ExecutedAt); err != nil {
 			return nil, err
 		}
@@ -435,14 +643,14 @@ func (db *DB) GetRecentRuns(sourceID int64, limit int) ([]ActionRun, error) {
 	return runs, rows.Err()
 }
 
-// GetFailedRuns returns action runs that need retry for a source.
-func (db *DB) GetFailedRuns(sourceID int64) ([]ActionRunWithType, error) {
+// GetFailedRuns returns action runs that need retry for a WAN interface.
+func (db *DB) GetFailedRuns(wanInterfaceID int64) ([]ActionRunWithType, error) {
 	rows, err := db.conn.Query(
-		`SELECT ar.id, ar.source_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip, a.type
+		`SELECT ar.id, ar.wan_interface_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip, a.type
 		 FROM action_runs ar JOIN actions a ON a.id = ar.action_id
-		 WHERE ar.source_id = ? AND ar.needs_retry = 1
+		 WHERE ar.wan_interface_id = ? AND ar.needs_retry = 1
 		 ORDER BY ar.executed_at ASC LIMIT 10`,
-		sourceID,
+		wanInterfaceID,
 	)
 	if err != nil {
 		return nil, err
@@ -453,7 +661,7 @@ func (db *DB) GetFailedRuns(sourceID int64) ([]ActionRunWithType, error) {
 	for rows.Next() {
 		var r ActionRunWithType
 		var oldIP, newIP sql.NullString
-		if err := rows.Scan(&r.ID, &r.SourceID, &r.ActionID, &r.EventType, &oldIP, &newIP, &r.ActionType); err != nil {
+		if err := rows.Scan(&r.ID, &r.WANInterfaceID, &r.ActionID, &r.EventType, &oldIP, &newIP, &r.ActionType); err != nil {
 			return nil, err
 		}
 		r.OldIP = oldIP.String
@@ -483,18 +691,18 @@ func (db *DB) PruneActionRuns(maxRows int) error {
 
 // HistoryFilter defines filter/pagination parameters for history queries.
 type HistoryFilter struct {
-	SourceID  int64
-	EventType string
-	Status    string
-	Limit     int
-	Offset    int
+	WANInterfaceID int64
+	EventType      string
+	Status         string
+	Limit          int
+	Offset         int
 }
 
-// ActionRunJoined extends ActionRun with source and action names.
+// ActionRunJoined extends ActionRun with WAN interface and action names.
 type ActionRunJoined struct {
 	ActionRun
-	SourceName string
-	ActionName string
+	WANInterfaceName string
+	ActionName       string
 }
 
 // GetRecentRunsJoined returns filtered, paginated action runs with joined names.
@@ -502,9 +710,9 @@ func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int,
 	where := "1=1"
 	args := []interface{}{}
 
-	if filter.SourceID > 0 {
-		where += " AND ar.source_id = ?"
-		args = append(args, filter.SourceID)
+	if filter.WANInterfaceID > 0 {
+		where += " AND ar.wan_interface_id = ?"
+		args = append(args, filter.WANInterfaceID)
 	}
 	if filter.EventType != "" {
 		where += " AND ar.event_type = ?"
@@ -533,12 +741,12 @@ func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int,
 	}
 
 	query := fmt.Sprintf(`
-		SELECT ar.id, ar.source_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip,
+		SELECT ar.id, ar.wan_interface_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip,
 		       ar.status, ar.needs_retry, ar.error_msg, ar.executed_at,
-		       COALESCE(s.name, '?') AS source_name,
+		       COALESCE(wi.name, '?') AS wan_interface_name,
 		       COALESCE(a.name, '?') AS action_name
 		FROM action_runs ar
-		LEFT JOIN sources s ON s.id = ar.source_id
+		LEFT JOIN wan_interfaces wi ON wi.id = ar.wan_interface_id
 		LEFT JOIN actions a ON a.id = ar.action_id
 		WHERE %s
 		ORDER BY ar.executed_at DESC
@@ -555,9 +763,9 @@ func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int,
 	for rows.Next() {
 		var r ActionRunJoined
 		var oldIP, newIP, errMsg sql.NullString
-		if err := rows.Scan(&r.ID, &r.SourceID, &r.ActionID, &r.EventType,
+		if err := rows.Scan(&r.ID, &r.WANInterfaceID, &r.ActionID, &r.EventType,
 			&oldIP, &newIP, &r.Status, &r.NeedsRetry, &errMsg, &r.ExecutedAt,
-			&r.SourceName, &r.ActionName); err != nil {
+			&r.WANInterfaceName, &r.ActionName); err != nil {
 			return nil, 0, fmt.Errorf("scanning run: %w", err)
 		}
 		r.OldIP = oldIP.String
@@ -568,33 +776,200 @@ func (db *DB) GetRecentRunsJoined(filter HistoryFilter) ([]ActionRunJoined, int,
 	return runs, total, rows.Err()
 }
 
-// GetSourceLinkedActionCount returns the count of enabled actions linked to a source.
-func (db *DB) GetSourceLinkedActionCount(sourceID int64) (int, error) {
+// HistoryEntry is the merged view of a check or an action run, used by the
+// History page to present a single chronological timeline.
+type HistoryEntry struct {
+	Kind             string // "check" or "action"
+	ID               int64
+	WANInterfaceID   int64
+	WANInterfaceName string
+	Event            string // check trigger ("manual"/"scheduled") or action event_type
+	ActionName       string // empty for checks
+	OldIP            string
+	NewIP            string
+	Status           string
+	ErrorMsg         string
+	ExecutedAt       time.Time
+}
+
+// GetMergedHistory returns the chronologically merged union of check rows
+// and action-run rows matching the filter. Filters on WAN interface and
+// status apply to both sources; event filter applies to action_runs only
+// (checks have no event type, they are always the full probe outcome).
+func (db *DB) GetMergedHistory(filter HistoryFilter) ([]HistoryEntry, int, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Build WHERE clauses independently for each source so we can UNION.
+	checksWhere := "1=1"
+	actionsWhere := "1=1"
+	checksArgs := []interface{}{}
+	actionsArgs := []interface{}{}
+
+	if filter.WANInterfaceID > 0 {
+		checksWhere += " AND wc.wan_interface_id = ?"
+		actionsWhere += " AND ar.wan_interface_id = ?"
+		checksArgs = append(checksArgs, filter.WANInterfaceID)
+		actionsArgs = append(actionsArgs, filter.WANInterfaceID)
+	}
+	if filter.Status != "" {
+		// Map UI status "success" to concrete values per source.
+		if filter.Status == "success" {
+			checksWhere += " AND wc.status IN ('ok','changed')"
+			actionsWhere += " AND ar.status = 'success'"
+		} else {
+			checksWhere += " AND wc.status = ?"
+			actionsWhere += " AND ar.status = ?"
+			checksArgs = append(checksArgs, filter.Status)
+			actionsArgs = append(actionsArgs, filter.Status)
+		}
+	}
+	if filter.EventType != "" {
+		// Event filter only applies to action_runs — checks never match.
+		actionsWhere += " AND ar.event_type = ?"
+		actionsArgs = append(actionsArgs, filter.EventType)
+		// Exclude checks entirely when filtering by event_type.
+		checksWhere += " AND 0 = 1"
+	}
+
+	// Count total (union).
+	countQuery := fmt.Sprintf(`
+		SELECT
+		  (SELECT COUNT(*) FROM wan_interface_checks wc WHERE %s)
+		+ (SELECT COUNT(*) FROM action_runs ar WHERE %s)`,
+		checksWhere, actionsWhere)
+	var total int
+	countArgs := append(append([]interface{}{}, checksArgs...), actionsArgs...)
+	if err := db.conn.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting history: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT kind, id, wan_interface_id, wan_interface_name, event, action_name,
+		       old_ip, new_ip, status, error_msg, executed_at
+		FROM (
+		  SELECT 'check' AS kind, wc.id AS id, wc.wan_interface_id,
+		         COALESCE(wi.name, '?') AS wan_interface_name,
+		         wc.trigger AS event,
+		         '' AS action_name,
+		         wc.previous_ip AS old_ip,
+		         wc.observed_ip AS new_ip,
+		         wc.status AS status,
+		         wc.error_msg AS error_msg,
+		         wc.executed_at AS executed_at
+		  FROM wan_interface_checks wc
+		  LEFT JOIN wan_interfaces wi ON wi.id = wc.wan_interface_id
+		  WHERE %s
+		  UNION ALL
+		  SELECT 'action' AS kind, ar.id AS id, ar.wan_interface_id,
+		         COALESCE(wi.name, '?') AS wan_interface_name,
+		         ar.event_type AS event,
+		         COALESCE(a.name, '?') AS action_name,
+		         ar.old_ip, ar.new_ip,
+		         ar.status,
+		         ar.error_msg,
+		         ar.executed_at
+		  FROM action_runs ar
+		  LEFT JOIN wan_interfaces wi ON wi.id = ar.wan_interface_id
+		  LEFT JOIN actions a ON a.id = ar.action_id
+		  WHERE %s
+		)
+		ORDER BY executed_at DESC
+		LIMIT ? OFFSET ?`, checksWhere, actionsWhere)
+	pageArgs := append(append([]interface{}{}, checksArgs...), actionsArgs...)
+	pageArgs = append(pageArgs, limit, offset)
+	rows, err := db.conn.Query(query, pageArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("querying history: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []HistoryEntry
+	for rows.Next() {
+		var e HistoryEntry
+		var oldIP, newIP, errMsg sql.NullString
+		if err := rows.Scan(&e.Kind, &e.ID, &e.WANInterfaceID, &e.WANInterfaceName,
+			&e.Event, &e.ActionName, &oldIP, &newIP, &e.Status, &errMsg, &e.ExecutedAt); err != nil {
+			return nil, 0, fmt.Errorf("scanning history: %w", err)
+		}
+		e.OldIP = oldIP.String
+		e.NewIP = newIP.String
+		e.ErrorMsg = errMsg.String
+		entries = append(entries, e)
+	}
+	return entries, total, rows.Err()
+}
+
+// GetWANInterfaceLinkedActionCount returns the count of enabled actions linked to a WAN interface.
+func (db *DB) GetWANInterfaceLinkedActionCount(wanInterfaceID int64) (int, error) {
 	var count int
 	err := db.conn.QueryRow(
-		"SELECT COUNT(*) FROM source_actions WHERE source_id = ? AND enabled = 1",
-		sourceID,
+		"SELECT COUNT(*) FROM wan_interface_actions WHERE wan_interface_id = ? AND enabled = 1",
+		wanInterfaceID,
 	).Scan(&count)
 	return count, err
 }
 
-// GetActionLinkedSourceCount returns the count of sources linked to an action.
-func (db *DB) GetActionLinkedSourceCount(actionID int64) (int, error) {
+// GetActionLinkedWANInterfaceCount returns the count of WAN interfaces linked to an action.
+func (db *DB) GetActionLinkedWANInterfaceCount(actionID int64) (int, error) {
 	var count int
 	err := db.conn.QueryRow(
-		"SELECT COUNT(*) FROM source_actions WHERE action_id = ? AND enabled = 1",
+		"SELECT COUNT(*) FROM wan_interface_actions WHERE action_id = ? AND enabled = 1",
 		actionID,
 	).Scan(&count)
 	return count, err
 }
 
-// GetActionLinkedSources returns the names of sources linked to an action.
-func (db *DB) GetActionLinkedSources(actionID int64) ([]string, error) {
+// LinkedWANInterface captures the subset of WAN interface state Execute
+// needs to fire an action against each link.
+type LinkedWANInterface struct {
+	WANInterfaceID int64
+	Name           string
+	LastObservedIP string
+}
+
+// GetActionLinkedWANInterfacesWithState returns the enabled WAN interfaces
+// linked to an action, including each WAN's last observed IP. Used by the
+// Actions-list Execute button to fan out against current live state.
+func (db *DB) GetActionLinkedWANInterfacesWithState(actionID int64) ([]LinkedWANInterface, error) {
 	rows, err := db.conn.Query(
-		`SELECT s.name FROM source_actions sa
-		 JOIN sources s ON s.id = sa.source_id
-		 WHERE sa.action_id = ? AND sa.enabled = 1
-		 ORDER BY s.name`,
+		`SELECT wi.id, wi.name, COALESCE(s.last_observed_ip, '')
+		 FROM wan_interface_actions wia
+		 JOIN wan_interfaces wi ON wi.id = wia.wan_interface_id
+		 LEFT JOIN wan_interface_state s ON s.wan_interface_id = wi.id
+		 WHERE wia.action_id = ? AND wia.enabled = 1 AND wi.enabled = 1
+		 ORDER BY wi.name`,
+		actionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LinkedWANInterface
+	for rows.Next() {
+		var w LinkedWANInterface
+		if err := rows.Scan(&w.WANInterfaceID, &w.Name, &w.LastObservedIP); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// GetActionLinkedWANInterfaces returns the names of WAN interfaces linked to an action.
+func (db *DB) GetActionLinkedWANInterfaces(actionID int64) ([]string, error) {
+	rows, err := db.conn.Query(
+		`SELECT wi.name FROM wan_interface_actions wia
+		 JOIN wan_interfaces wi ON wi.id = wia.wan_interface_id
+		 WHERE wia.action_id = ? AND wia.enabled = 1
+		 ORDER BY wi.name`,
 		actionID,
 	)
 	if err != nil {

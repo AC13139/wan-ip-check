@@ -18,58 +18,66 @@ type Action struct {
 	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
-// SourceAction links a source to an action with routing config.
-type SourceAction struct {
-	SourceID       int64           `json:"source_id"`
-	ActionID       int64           `json:"action_id"`
-	TriggerOn      string          `json:"trigger_on"` // ip_changed, ip_unchanged_daily, both
-	RunOrder       int             `json:"run_order"`
-	Enabled        bool            `json:"enabled"`
+// WANInterfaceAction links a WAN interface to an action with routing config.
+type WANInterfaceAction struct {
+	WANInterfaceID   int64           `json:"wan_interface_id"`
+	ActionID         int64           `json:"action_id"`
+	TriggerOn        string          `json:"trigger_on"` // ip_changed, ip_unchanged_daily, both
+	RunOrder         int             `json:"run_order"`
+	Enabled          bool            `json:"enabled"`
 	// Joined fields from actions table (populated by GetLinkedActions)
-	ActionType     string          `json:"action_type"`
-	ActionName     string          `json:"action_name"`
+	ActionType       string          `json:"action_type"`
+	ActionName       string          `json:"action_name"`
 	ActionConfigJSON json.RawMessage `json:"action_config"`
 }
 
 // ActionRun records the result of executing an action.
 type ActionRun struct {
-	ID         int64     `json:"id"`
-	SourceID   int64     `json:"source_id"`
-	ActionID   int64     `json:"action_id"`
-	EventType  string    `json:"event_type"`
-	OldIP      string    `json:"old_ip"`
-	NewIP      string    `json:"new_ip"`
-	Status     string    `json:"status"` // success, failed, skipped
-	NeedsRetry bool      `json:"needs_retry"`
-	ErrorMsg   string    `json:"error_msg"`
-	ExecutedAt time.Time `json:"executed_at"`
+	ID             int64     `json:"id"`
+	WANInterfaceID int64     `json:"wan_interface_id"`
+	ActionID       int64     `json:"action_id"`
+	EventType      string    `json:"event_type"`
+	OldIP          string    `json:"old_ip"`
+	NewIP          string    `json:"new_ip"`
+	Status         string    `json:"status"` // success, failed, skipped
+	NeedsRetry     bool      `json:"needs_retry"`
+	ErrorMsg       string    `json:"error_msg"`
+	ExecutedAt     time.Time `json:"executed_at"`
 }
 
 // ActionRunWithType extends ActionRun with the action's type (for retry dispatch).
 type ActionRunWithType struct {
-	ID         int64  `json:"id"`
-	SourceID   int64  `json:"source_id"`
-	ActionID   int64  `json:"action_id"`
-	EventType  string `json:"event_type"`
-	OldIP      string `json:"old_ip"`
-	NewIP      string `json:"new_ip"`
-	ActionType string `json:"action_type"`
+	ID             int64  `json:"id"`
+	WANInterfaceID int64  `json:"wan_interface_id"`
+	ActionID       int64  `json:"action_id"`
+	EventType      string `json:"event_type"`
+	OldIP          string `json:"old_ip"`
+	NewIP          string `json:"new_ip"`
+	ActionType     string `json:"action_type"`
 }
 
 // IPEvent carries event data passed to action executors.
 type IPEvent struct {
-	SourceID   int64  `json:"source_id"`
-	SourceName string `json:"source_name"`
-	EventType  string `json:"event_type"` // ip_changed, ip_unchanged_daily
-	OldIP      string `json:"old_ip"`
-	NewIP      string `json:"new_ip"`
-	Timestamp  string `json:"timestamp"` // RFC3339
+	WANInterfaceID   int64  `json:"wan_interface_id"`
+	WANInterfaceName string `json:"wan_interface_name"`
+	EventType        string `json:"event_type"` // ip_changed, ip_unchanged_daily
+	OldIP            string `json:"old_ip"`
+	NewIP            string `json:"new_ip"`
+	Timestamp        string `json:"timestamp"` // RFC3339
 }
 
 // ActionExecutor is the interface that action type implementations must satisfy.
 type ActionExecutor interface {
 	// Type returns the action type identifier (e.g., "cloudflare_dns").
 	Type() string
+
+	// DisplayName returns a human-friendly name for UI rendering (e.g.,
+	// "Cloudflare DNS Record"). Type() stays as the stable internal ID.
+	DisplayName() string
+
+	// Description returns a one-sentence explanation shown under the Action
+	// Type dropdown to help users pick the right integration.
+	Description() string
 
 	// Execute runs the action with the given event and config.
 	Execute(ctx context.Context, event IPEvent, config json.RawMessage) error
@@ -129,6 +137,43 @@ func (r *ActionRegistry) Types() []string {
 		types = append(types, t)
 	}
 	return types
+}
+
+// ActionTypeInfo is a UI-ready summary of a registered action type.
+type ActionTypeInfo struct {
+	Type        string // stable internal ID (used in DB / API)
+	DisplayName string
+	Description string
+}
+
+// TypeInfos returns UI-ready info for all registered executors, sorted by
+// DisplayName for a stable dropdown order.
+func (r *ActionRegistry) TypeInfos() []ActionTypeInfo {
+	infos := make([]ActionTypeInfo, 0, len(r.executors))
+	for _, e := range r.executors {
+		infos = append(infos, ActionTypeInfo{
+			Type:        e.Type(),
+			DisplayName: e.DisplayName(),
+			Description: e.Description(),
+		})
+	}
+	// Stable order by DisplayName
+	for i := 1; i < len(infos); i++ {
+		for j := i; j > 0 && infos[j-1].DisplayName > infos[j].DisplayName; j-- {
+			infos[j-1], infos[j] = infos[j], infos[j-1]
+		}
+	}
+	return infos
+}
+
+// DisplayName returns the human-friendly name for an action type, or the
+// type ID itself if no executor is registered (defensive fallback for
+// historical rows whose executor was removed).
+func (r *ActionRegistry) DisplayName(actionType string) string {
+	if e, ok := r.executors[actionType]; ok {
+		return e.DisplayName()
+	}
+	return actionType
 }
 
 const secretMask = "•••••"

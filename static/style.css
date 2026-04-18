@@ -192,8 +192,7 @@ a:hover {
   border-color: var(--border-prominent);
 }
 .card.disabled {
-  opacity: 0.5;
-  pointer-events: none;
+  opacity: 0.55;
 }
 .card.accent {
   border-color: var(--border-accent);
@@ -576,4 +575,270 @@ tbody tr:hover {
   .form-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* ========== Diagnostics Panel ========== */
+.diagnostics-panel {
+  background: var(--surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+.diagnostics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-sm);
+}
+.diagnostics-title {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0;
+}
+.diagnostics-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+.diagnostics-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+.diag-label {
+  flex: 0 0 140px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+}
+.diag-value {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+}
+.diag-value.mono {
+  font-family: var(--font-mono);
+}
+.diagnostics-footer {
+  margin-top: var(--space-sm);
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+}
+.diag-timestamp {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.diagnostics-loading .diag-label {
+  color: var(--text-muted);
+}
+
+/* Recommendation banner inside diagnostics panel */
+.recommendation-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  background: var(--accent-wash);
+  border-left: 2px solid var(--accent);
+  padding: var(--space-sm) var(--space-md);
+  margin-top: var(--space-md);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.recommendation-icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+  margin-top: 2px;
+}
+.recommendation-text {
+  font-size: 13px;
+  color: var(--accent);
+  line-height: 1.4;
+}
+
+/* Test Route button + inline result */
+.test-route-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  flex-wrap: wrap;
+}
+.test-route-spinner {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.htmx-indicator {
+  opacity: 0;
+  transition: opacity 150ms ease-in;
+}
+.htmx-request .htmx-indicator {
+  opacity: 1;
+}
+.htmx-request.htmx-indicator {
+  opacity: 1;
+}
+.test-route-result:empty {
+  display: none;
+}
+
+/* ========== Actions: + card ========== */
+.card-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  min-height: 160px;
+  background: transparent;
+  border: 1px dashed var(--border-prominent);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.card-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+.card-add-plus {
+  font-size: 36px;
+  font-weight: 300;
+  line-height: 1;
+}
+.card-add-label {
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* ========== Actions: Execute per-WAN result strip ========== */
+.execute-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+}
+.execute-result:empty {
+  display: none;
+  margin-top: 0;
+}
+.btn:disabled[title] {
+  cursor: help;
+}
+
+/* ========== WAN Interface card meta row ========== */
+.wi-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+.wi-error-row {
+  margin-top: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--error-bg);
+  border-left: 2px solid var(--error);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  word-break: break-word;
+}
+
+/* ========== Cloudflare DNS custom form ========== */
+.cf-zone-row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+.cf-zone-row .form-select {
+  flex: 1;
+}
+.cf-records-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+.cf-record-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-sm);
+  align-items: center;
+}
+.cf-proxied-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.cf-proxied-toggle input[type="checkbox"] {
+  accent-color: var(--warning);
+}
+.cf-proxied-toggle:has(input:checked) {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.cf-proxied-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.record-remove {
+  min-width: 32px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+.cf-legacy-banner {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--warning-bg);
+  border-left: 2px solid var(--warning);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ========== Action edit: Triggers repeater ========== */
+.triggers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: var(--space-md) 0;
+}
+.trigger-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+.trigger-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.trigger-row .form-select {
+  width: auto;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+.trigger-row .trigger-remove {
+  min-width: 32px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+
+/* ========== Action edit: Test button + inline result ========== */
+.test-action-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+.test-action-result:empty {
+  display: none;
 }

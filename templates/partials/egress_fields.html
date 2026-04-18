@@ -1,0 +1,37 @@
+{{define "egress-fields"}}
+{{if eq .Mode "default"}}
+<div class="form-group">
+  <label class="form-label">Interface (optional)</label>
+  <select name="egress_interface" class="form-select">
+    <option value="">Auto (system default)</option>
+    {{range .Interfaces}}
+    <option value="{{.Name}}" {{if eq .Name $.InterfaceName}}selected{{end}}>{{.Name}} — {{index .Addresses 0}}</option>
+    {{end}}
+  </select>
+  <div class="form-help">Bind outgoing requests to a specific network interface</div>
+</div>
+{{else if eq .Mode "gateway"}}
+<div class="form-group">
+  <label class="form-label">Interface</label>
+  <select name="egress_interface" class="form-select" required>
+    <option value="">— select interface —</option>
+    {{range .Interfaces}}
+    <option value="{{.Name}}" {{if eq .Name $.InterfaceName}}selected{{end}}>{{.Name}} — {{index .Addresses 0}}</option>
+    {{end}}
+  </select>
+</div>
+<div class="form-group">
+  <label class="form-label">Gateway IP</label>
+  <input type="text" name="egress_gateway" class="form-input mono" required
+         value="{{.Gateway}}" placeholder="e.g., 192.168.5.6">
+  <div class="form-help">Requires NET_ADMIN capability in the container</div>
+</div>
+{{else if eq .Mode "proxy"}}
+<div class="form-group">
+  <label class="form-label">Proxy URL</label>
+  <input type="text" name="egress_proxy_url" class="form-input mono" required
+         value="{{.ProxyURL}}" placeholder="http://proxy:3128">
+  <div class="form-help">HTTP/HTTPS proxy for outgoing IP detection requests</div>
+</div>
+{{end}}
+{{end}}

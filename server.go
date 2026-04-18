@@ -74,13 +74,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // registerAPIRoutes sets up all /api/* endpoints (JSON, no CSRF).
 func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/status", s.handleGetStatus)
-	mux.HandleFunc("GET /api/sources", s.handleListSources)
-	mux.HandleFunc("POST /api/sources", s.handleCreateSource)
-	mux.HandleFunc("GET /api/sources/{id}", s.handleGetSource)
-	mux.HandleFunc("PUT /api/sources/{id}", s.handleUpdateSource)
-	mux.HandleFunc("DELETE /api/sources/{id}", s.handleDeleteSource)
-	mux.HandleFunc("POST /api/sources/{id}/check", s.handleManualCheck)
-	mux.HandleFunc("GET /api/sources/{id}/history", s.handleSourceHistory)
+	mux.HandleFunc("GET /api/wan-interfaces", s.handleListWANInterfaces)
+	mux.HandleFunc("POST /api/wan-interfaces", s.handleCreateWANInterface)
+	mux.HandleFunc("GET /api/wan-interfaces/{id}", s.handleGetWANInterface)
+	mux.HandleFunc("PUT /api/wan-interfaces/{id}", s.handleUpdateWANInterface)
+	mux.HandleFunc("DELETE /api/wan-interfaces/{id}", s.handleDeleteWANInterface)
+	mux.HandleFunc("POST /api/wan-interfaces/{id}/check", s.handleManualCheck)
+	mux.HandleFunc("GET /api/wan-interfaces/{id}/history", s.handleWANInterfaceHistory)
 	mux.HandleFunc("GET /api/actions", s.handleListActions)
 	mux.HandleFunc("POST /api/actions", s.handleCreateAction)
 	mux.HandleFunc("GET /api/actions/{id}", s.handleGetAction)
@@ -88,8 +88,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/actions/{id}", s.handleDeleteAction)
 	mux.HandleFunc("POST /api/actions/{id}/test", s.handleTestAction)
 	mux.HandleFunc("GET /api/action-types", s.handleListActionTypes)
-	mux.HandleFunc("GET /api/sources/{id}/actions", s.handleGetSourceActions)
-	mux.HandleFunc("PUT /api/sources/{id}/actions", s.handleSetSourceActions)
+	mux.HandleFunc("GET /api/wan-interfaces/{id}/actions", s.handleGetWANInterfaceActions)
+	mux.HandleFunc("PUT /api/wan-interfaces/{id}/actions", s.handleSetWANInterfaceActions)
+	mux.HandleFunc("GET /api/network/interfaces", s.handleNetworkInterfaces)
+	mux.HandleFunc("GET /api/network/capabilities", s.handleNetworkCapabilities)
+	mux.HandleFunc("GET /api/network/diagnostics", s.handleNetworkDiagnostics)
 	mux.HandleFunc("GET /api/history", s.handleGlobalHistory)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
@@ -98,10 +101,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 // registerUIRoutes sets up all UI page + HTMX partial endpoints.
 func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	// Full pages
-	mux.HandleFunc("GET /{$}", s.handleDashboard)
-	mux.HandleFunc("GET /sources", s.handleSourcesPage)
-	mux.HandleFunc("GET /sources/new", s.handleSourceForm)
-	mux.HandleFunc("GET /sources/{id}", s.handleSourceForm)
+	mux.HandleFunc("GET /{$}", s.handleWANInterfacesPage)
+	mux.HandleFunc("GET /wan-interfaces", s.handleWANInterfacesPage)
+	mux.HandleFunc("GET /wan-interfaces/new", s.handleWANInterfaceForm)
+	mux.HandleFunc("GET /wan-interfaces/{id}", s.handleWANInterfaceForm)
 	mux.HandleFunc("GET /actions", s.handleActionsPage)
 	mux.HandleFunc("GET /actions/new", s.handleActionForm)
 	mux.HandleFunc("GET /actions/{id}", s.handleActionForm)
@@ -109,23 +112,28 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /settings", s.handleSettingsPage)
 
 	// HTMX partials — form submissions
-	mux.HandleFunc("POST /ui/sources", s.handleUICreateSource)
-	mux.HandleFunc("POST /ui/sources/{id}", s.handleUIUpdateSource)
+	mux.HandleFunc("POST /ui/wan-interfaces", s.handleUICreateWANInterface)
+	mux.HandleFunc("POST /ui/wan-interfaces/{id}", s.handleUIUpdateWANInterface)
 	mux.HandleFunc("POST /ui/actions", s.handleUICreateAction)
 	mux.HandleFunc("POST /ui/actions/{id}", s.handleUIUpdateAction)
 	mux.HandleFunc("PUT /ui/settings", s.handleUIUpdateSettings)
 
 	// HTMX partials — inline actions
-	mux.HandleFunc("POST /ui/sources/{id}/check", s.handleUIManualCheck)
-	mux.HandleFunc("POST /ui/sources/{id}/toggle", s.handleUIToggleSource)
+	mux.HandleFunc("POST /ui/wan-interfaces/{id}/check", s.handleUIManualCheck)
+	mux.HandleFunc("POST /ui/wan-interfaces/{id}/toggle", s.handleUIToggleWANInterface)
 	mux.HandleFunc("POST /ui/actions/{id}/toggle", s.handleUIToggleAction)
-	mux.HandleFunc("POST /ui/actions/{id}/test", s.handleUITestAction)
-	mux.HandleFunc("DELETE /ui/sources/{id}", s.handleUIDeleteSource)
+	mux.HandleFunc("POST /ui/actions/{id}/execute", s.handleUIExecuteAction)
+	mux.HandleFunc("POST /ui/action-test", s.handleUITestAction)
+	mux.HandleFunc("POST /ui/cloudflare/zones", s.handleUICloudflareZones)
+	mux.HandleFunc("DELETE /ui/wan-interfaces/{id}", s.handleUIDeleteWANInterface)
 	mux.HandleFunc("DELETE /ui/actions/{id}", s.handleUIDeleteAction)
 
 	// HTMX partials — data loading
+	mux.HandleFunc("GET /ui/egress-fields", s.handleUIEgressFields)
 	mux.HandleFunc("GET /ui/action-schema", s.handleUIActionSchema)
 	mux.HandleFunc("GET /ui/history-table", s.handleUIHistoryTable)
+	mux.HandleFunc("GET /ui/network-diagnostics", s.handleUINetworkDiagnostics)
+	mux.HandleFunc("POST /ui/test-route", s.handleUITestRoute)
 }
 
 // --- Middleware ---

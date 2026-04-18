@@ -1,83 +1,76 @@
 # wan-ip-check
 
-A self-hosted WAN IP monitor with a Web UI for managing what happens when your public IP changes. Configure **Actions** — Cloudflare DNS updates, Gateway location syncs, Discord alerts, custom webhooks — and monitor multiple gateways from one dashboard.
+A self-hosted WAN IP monitor with a Web UI that reacts to IP changes. Point any number of WAN interfaces at the public internet, and wire up **Actions** — Cloudflare DNS updates, Zero Trust Gateway location sync, Discord/webhook notifications — from a single dashboard. No YAML, no cron files, no glue scripts.
+
+[![Docker](https://img.shields.io/docker/pulls/ac13139/wan-ip-check.svg)](https://hub.docker.com/r/ac13139/wan-ip-check)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 ## Why This Tool?
 
 **"But Cloudflare already has DDNS tools..."**
 
-Yes — tools like [oznu/cloudflare-ddns](https://github.com/oznu/cloudflare-ddns) update your DNS records when your IP changes. They do one thing well. But if your needs go beyond a single DNS update, you'll end up running multiple containers, scripts, and cron jobs stitched together:
+Tools like [oznu/cloudflare-ddns](https://github.com/oznu/cloudflare-ddns) update DNS records when your IP changes — they do one thing well. Once your needs go past a single DNS update, you end up running several single-purpose containers, a couple of bash scripts, and a pile of cron entries.
 
 | Need | cloudflare-ddns | wan-ip-check |
-|------|----------------|--------------|
+|------|-----------------|--------------|
 | Update DNS A records | Yes | Yes (Action) |
-| Update Cloudflare Gateway source IP | No | Yes (Action) |
-| Notify via Discord/webhook | No | Yes (Action) |
-| Monitor multiple gateways | No | Yes (Sources) |
-| Web dashboard for status | No | Yes |
-| IP change history with logs | No | Yes |
-| Custom webhook to any service | No | Yes (Action) |
-| Configure via UI (not just env vars) | No | Yes |
+| Update Cloudflare Zero Trust Gateway External IP | No | Yes (Action) |
+| Notify via Discord / webhook | No | Yes (Action) |
+| Monitor multiple WAN gateways (e.g. ISP + VPN) | No | Yes |
+| Per-WAN egress routing (default / specific gateway / proxy) | No | Yes (fwmark PBR) |
+| Web dashboard for status + diagnostics | No | Yes |
+| Full check + action-run history with filters | No | Yes |
+| Configure by UI, not env vars / YAML | No | Yes |
 
 **wan-ip-check is for users who:**
-- Run a home server with a dynamic ISP IP and need more than DNS updates
-- Use Cloudflare Zero Trust and need Gateway DNS location source IPs to stay current
-- Have multiple WAN gateways (ISP + VPN) that need independent monitoring
-- Want one tool, one container, one dashboard — not a stack of single-purpose scripts
+- Run a home server on a dynamic ISP IP and need more than just DNS updates
+- Use Cloudflare Zero Trust and need Gateway DNS location External IPs to stay current
+- Have multiple WAN gateways (dual ISP, ISP + VPN) monitored independently
+- Want one container, one dashboard, one audit log
 
-## Architecture
+## Features
 
-```
-┌─────────────────────────────────────────────┐
-│              wan-ip-check                    │
-│                                              │
-│  Sources ──→ IP Detection ──→ Actions        │
-│                                              │
-│  ┌──────────────┐    ┌───────────────────┐  │
-│  │ Home Gateway  │    │ Cloudflare DNS    │  │
-│  │ VPN Gateway   │    │ Cloudflare Gateway│  │
-│  │ ...           │    │ Discord           │  │
-│  └──────────────┘    │ Custom Webhook    │  │
-│                       └───────────────────┘  │
-│                                              │
-│  Web UI (:7373)  ·  REST API  ·  SQLite DB   │
-└─────────────────────────────────────────────┘
-```
-
-- **Sources** detect your WAN IP using configurable probe services (primary + fallback)
-- **Actions** execute when an IP changes (or as a daily summary)
-- **Source→Action links** let different gateways trigger different actions
-- Everything configurable via Web UI — no YAML or config files to manage
+- **Multi-WAN monitoring** — any number of WAN interfaces, each with its own schedule, probe URLs, and egress path
+- **Three egress modes** per WAN (pick from a dropdown):
+  - **Default route** — normal outbound
+  - **Specific gateway** — fwmark-based PBR, so multiple WANs sharing a single source IP (Docker macvlan with two gateways on the same subnet) still each route through the right gateway
+  - **HTTP proxy** — for environments where the outbound path goes through an internal proxy
+- **Network Diagnostics panel** on the WAN form auto-detects Docker runtime, `NET_ADMIN` capability, available interfaces, and default gateway — recommends which egress mode will work
+- **Four action types**:
+  - **Cloudflare DNS Record** — zone dropdown, records by name (`@`, `*`, `api`, `api.example.com`), per-record proxied (orange cloud) toggle, missing records auto-created on first update
+  - **Cloudflare Gateway Locations** — keeps Zero Trust DNS location External IP aligned with your WAN
+  - **Discord Webhook** — rich-embed notifications, optional HTTP proxy for blocked regions
+  - **HTTP Webhook** — configurable method / headers / Go-template body to any endpoint
+- **Triggers on actions** — an action declares *"triggered by `<WAN>` when `<event>`"*, so one Cloudflare DNS record action is wired in one form. Linked-Actions on the WAN side stays as a bulk-link path
+- **Event History** merges check outcomes (ok / changed / failed) with action-run outcomes into a single filterable timeline
+- **Execute** a saved action on demand against the current observed IP; **Test** an in-progress config without saving (read-only probe for Cloudflare DNS, synthetic send for Discord/webhook)
+- **Secrets encrypted at rest** via AES-256-GCM; CSRF-protected UI
 
 ## Quick Start
 
-### Docker (recommended)
+### Docker
 
 ```bash
 docker run -d \
   --name wan-ip-check \
   --restart unless-stopped \
+  --cap-add=NET_ADMIN \
   -p 7373:7373 \
   -v wan-ip-data:/app/data \
-  -e DISCORD_PROXY=http://your-proxy:port \
   ac13139/wan-ip-check:latest
 ```
 
-Open `http://your-server:7373` to configure sources and actions via the Web UI.
+Open `http://your-server:7373` and configure via the Web UI.
+
+`--cap-add=NET_ADMIN` is only required if you plan to use **Specific gateway** egress mode. Default and proxy modes work without it.
 
 ### Docker Compose
 
 ```bash
-# 1. Clone and configure
 git clone https://github.com/AC13139/wan-ip-check.git
 cd wan-ip-check
-cp .env.example .env
-# Edit .env — at minimum set DISCORD_PROXY if using Discord
-
-# 2. Run
+cp .env.example .env   # optional — only if you want Discord proxy or custom port
 docker compose up -d
-
-# 3. Open the dashboard
 open http://localhost:7373
 ```
 
@@ -92,166 +85,181 @@ go build -o wan-ip-check .
 ./wan-ip-check
 ```
 
-### Migrate from v1 / Environment Variables
-
-If you're upgrading from v1 or prefer env-var configuration, set your variables in `.env` and start the container. On first run with an empty database, wan-ip-check **automatically migrates** your env vars into the database:
-
-- `DISCORD_WEBHOOK_URL` → creates a Discord action
-- `CF_API_TOKEN` + `CF_ZONE_ID` + `CF_DNS_RECORD_IDS` → creates a CF DNS action
-- `CF_API_TOKEN` + `CF_ACCOUNT_ID` + `CF_LOCATION_ID` → creates a CF Gateway action
-- `CRON_SCHEDULE`, `DAILY_SUMMARY_TIME`, `TIMEZONE` → seeded into settings
-
-After migration, the database is the source of truth. Use the Web UI to make changes.
-
 ## Web UI
 
-The dashboard at `http://localhost:7373` provides:
+`http://localhost:7373` lands on **WAN Interfaces** (the home page).
 
-- **Dashboard** — Current IP per source, health status, recent events
-- **Sources** — Manage IP detection sources (probe URLs, schedule, interface binding)
-- **Actions** — Configure what happens on IP change (Cloudflare, Discord, webhooks)
-- **History** — Filterable event log with per-action results
-- **Settings** — Daily summary time, timezone, encryption status
+- **WAN Interfaces** — card grid; each card shows status dot, current IP, last-check time, linked-action count, and Edit / Check IP / Delete controls. `+` card opens the editor for a new WAN.
+- **Actions** — card grid with Execute / Delete per card; `+` card for a new action. Execute fans the action out over every linked WAN using each WAN's current observed IP.
+- **History** — merged timeline of every IP check (scheduled + manual) and every action run, filterable by WAN, event type, and status.
+- **Settings** — daily summary time, timezone, encryption key path.
+
+## Schedule
+
+Every WAN has a simple `Check every [N] [Minutes | Hours | Days]` selector. Minutes 1–59, Hours 1–23, Days 1–31. If you had a custom cron on an older install, the form shows the raw expression and lets you edit it — otherwise the dropdown is the primary path.
 
 ## Action Types
 
-### Cloudflare DNS
+### Cloudflare DNS Record
 
-Updates A records when your IP changes. Supports multiple records per action.
+One API token, one zone picked from a dropdown, and any number of record names. Per record you choose **Proxied** (orange cloud) on or off. Missing records are created automatically on the first IP update; existing records are patched in place (only `content` + `proxied` — your comments, tags, and settings are preserved).
 
-Configure with your API token, zone ID, and record IDs. To find record IDs, use the Cloudflare API:
+Required token permissions: **Zone:Read** + **DNS:Edit**.
 
-```bash
-curl -s "https://api.cloudflare.com/client/v4/zones/YOUR_ZONE_ID/dns_records" \
-  -H "Authorization: Bearer YOUR_API_TOKEN" | jq '.result[] | {id, name, type, content}'
-```
+Record name examples:
 
-> **Planned**: The Web UI will add a record browser in a future release so you can select records without looking up IDs manually.
+| Name | Resolves to |
+|------|-------------|
+| `@` | Zone root (e.g. `example.com`) |
+| `*` | Wildcard (`*.example.com` — note: does **not** cover the apex) |
+| `api` | Short name, auto-expanded to `api.example.com` |
+| `api.example.com` | Kept as-is |
 
-### Cloudflare Gateway
+**Test** button is a read-only probe: verifies the token, confirms zone access, lists records, and reports which configured names already exist vs. will be created. No mutations, no history entries. Also flags name conflicts (existing CNAME blocking an A).
 
-Updates Zero Trust Gateway DNS location source IPv4 address. Essential for Cloudflare Zero Trust users with dynamic IPs — keeps your Gateway policies working when your ISP changes your IP.
+Legacy `record_ids` configs from earlier versions keep running; editing surfaces a migration banner. Re-save through the new form to adopt the name-based shape.
 
-### Discord
+### Cloudflare Gateway Locations
 
-Sends rich embed notifications via webhook. Shows old IP, new IP, source name, and a daily "no change" summary. Requires an HTTP proxy in regions where Discord is blocked (e.g., China).
+Updates the **External IP** on a Cloudflare Zero Trust Gateway DNS location so your filtering policies keep matching traffic from your WAN. Required: API token, Account ID, Location ID.
 
-### Custom Webhook
+### Discord Webhook
 
-Send a POST/PUT/PATCH to any URL with a templated body. Use Go template syntax:
+Rich embed on IP change and (optionally) as a daily summary when the IP has **not** changed. Set `DISCORD_PROXY` globally, or a per-action proxy, if Discord is unreachable from your network.
+
+### HTTP Webhook
+
+POST / PUT / PATCH / GET to any URL with JSON headers and a Go-template body.
 
 ```json
-{"ip": {{json .NewIP}}, "old": {{json .OldIP}}, "source": {{json .SourceName}}, "event": {{json .Event}}}
+{"ip": {{json .NewIP}}, "old": {{json .OldIP}}, "wan": {{json .WANInterfaceName}}, "event": {{json .Event}}}
 ```
 
-Available fields: `{{.NewIP}}`, `{{.OldIP}}`, `{{.SourceName}}`, `{{.Event}}`, `{{.Timestamp}}`. Use `{{json .Field}}` for safe JSON escaping.
+Available fields: `{{.NewIP}}`, `{{.OldIP}}`, `{{.WANInterfaceName}}`, `{{.Event}}`, `{{.Timestamp}}`. Wrap with `{{json .Field}}` for safe JSON escaping.
 
-## Multi-Source Monitoring
+## Triggers
 
-If you have multiple WAN gateways (e.g., ISP + VPN), create a Source for each:
+Each action has a **Triggers** card: *"Triggered by `<WAN>` when `<event>`"*, one row per WAN that should fire it. Events: IP changes, Daily summary (no change), or Both. Multi-WAN actions (Discord aggregate notifications) just add more rows with `+ Add trigger`.
 
-- **Home Gateway** → Cloudflare DNS for `home.example.com` + Discord alert
-- **VPN Gateway** → Cloudflare DNS for `vpn.example.com` + CF Gateway location update
+The WAN edit form also has a **Linked Actions** section — same join table, same effect. Use it when creating a new WAN alongside several existing actions to bulk-link in one pass.
 
-Each source checks independently on its own schedule, with its own probe URLs, and triggers only its linked actions.
+## Multi-Gateway on Single-NIC Containers
+
+A common setup: one container with one interface, but two physical gateways on the same subnet (e.g. Docker macvlan with two ISPs). Per-WAN **Specific gateway** mode installs fwmark-based PBR rules so each WAN's probes go through its own gateway, without changing the host default route. Concurrent checks are safe.
+
+Requires `--cap-add=NET_ADMIN`. The Network Diagnostics panel on the WAN form will detect this and recommend **Specific gateway** mode.
 
 ## IP Detection
 
-Each source probes external services to determine the public IP. Default strategy: **primary + fallback** — try each URL in order, return the first valid IPv4.
+Each WAN runs its own probe chain. Default URLs:
 
-Default probe URLs:
 1. `https://api.ipify.org`
 2. `https://checkip.amazonaws.com`
 3. `https://ifconfig.me/ip`
 
-You can add, remove, or reorder URLs per source. For multi-gateway setups, use interface binding to ensure each source checks through the correct gateway.
+Strategy is **fallback** by default (try in order until one returns a valid IPv4) or **single** (only hit the first URL). Timeout is per-WAN.
+
+Only IPv4 today. IPv6 / AAAA is tracked in [issue #28](https://github.com/AC13139/wan-ip-check/issues/28).
+
+## Event History
+
+Every check outcome is recorded — even unchanged ok results — and merged with action-run records into a single timeline. Filter by WAN, event, or status. Manual "Check IP" clicks appear with `trigger=manual`; scheduled runs are `trigger=scheduled`. Auto-recycling of stale check rows is tracked in [issue #29](https://github.com/AC13139/wan-ip-check/issues/29).
 
 ## Security
 
-- **Secrets encrypted at rest**: API tokens and webhook URLs are encrypted with AES-256-GCM before storing in SQLite. Encryption key is auto-generated on first run (back it up).
-- **Web UI masks secrets**: Tokens shown as `•••••` — never displayed in plaintext.
-- **CSRF protection**: All state-changing UI requests validated with tokens.
-- **No auth by default**: The Web UI is intended for local network access or behind a reverse proxy with authentication. API auth is planned for a future release.
+- **Secrets encrypted at rest** with AES-256-GCM. Key is auto-generated in `data/encryption.key` on first run — **back it up**, or pin it with `ENCRYPTION_KEY` (32-byte hex).
+- **UI masks secrets** as `•••••`; secrets never leave the server in plaintext.
+- **CSRF protection** on every state-changing request.
+- **No built-in auth** — intended for local networks or behind an authenticating reverse proxy. API auth is tracked as a roadmap item.
 
 ## Configuration Reference
 
-### Infrastructure (always from env vars)
+### Infrastructure (env vars only)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `7373` | Web UI + API port |
-| `DATA_DIR` | `./data` | SQLite database + encryption key directory |
-| `DISCORD_PROXY` | — | HTTP proxy for Discord API access |
-| `ENCRYPTION_KEY` | auto-generated | Hex-encoded 32-byte AES key (optional) |
+| `DATA_DIR` | `./data` | SQLite + encryption key directory |
+| `DISCORD_PROXY` | — | Global HTTP proxy for Discord actions |
+| `ENCRYPTION_KEY` | auto-generated | 32-byte hex AES key (optional pin) |
 
-### PBR Routing (advanced)
+### Upgrade / Migration
 
-For Docker containers with multiple network interfaces:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NOTIFICATION_INTERFACE` | — | Network interface triggering PBR setup |
-| `PBR_GATEWAY` | `192.168.10.1` | Gateway for notification interface |
-| `PBR_DEV` | `eth1` | Device for PBR routing table |
-| `PBR_TABLE` | `10` | Routing table number |
-
-> PBR requires `cap_add: NET_ADMIN` in Docker.
+- **From v2.0.0-alpha** — schema change `sources → wan_interfaces` runs automatically on first start. Data preserved.
+- **From v1 env-var config** — set `DISCORD_WEBHOOK_URL`, `CF_API_TOKEN` + `CF_ZONE_ID` + `CF_DNS_RECORD_IDS`, etc. On first run against an empty DB they are seeded into Actions. After the first start the DB is source of truth.
 
 ## REST API
 
-All endpoints are available at `/api/*` for programmatic access:
+All endpoints under `/api/*`:
 
 ```bash
-# Status
 curl http://localhost:7373/api/status
-
-# List sources with state
-curl http://localhost:7373/api/sources
-
-# Trigger manual check
-curl -X POST http://localhost:7373/api/sources/1/check
-
-# List actions (secrets masked)
-curl http://localhost:7373/api/actions
-
-# View history
+curl http://localhost:7373/api/wan-interfaces          # with state
+curl -X POST http://localhost:7373/api/wan-interfaces/1/check   # manual check
+curl http://localhost:7373/api/actions                  # secrets masked
 curl http://localhost:7373/api/history?limit=50
+curl http://localhost:7373/api/network/diagnostics     # runtime + caps + recommendation
 ```
 
 ## Docker Hub
 
-Pre-built images: [`ac13139/wan-ip-check`](https://hub.docker.com/r/ac13139/wan-ip-check)
+[`ac13139/wan-ip-check`](https://hub.docker.com/r/ac13139/wan-ip-check)
 
 | Tag | Description |
 |-----|-------------|
-| `latest` | Latest build from `main` |
-| `X.Y.Z` | Specific version |
-| `X.Y` | Latest patch for minor version |
+| `latest` | Current stable, tracks `main` |
+| `X.Y.Z` | Pinned version (e.g. `2.0.0`) |
+| `X.Y` | Latest patch of a minor line |
+| `beta` | Rolling pre-release from `v2-dev` |
+| `v2-dev` | Same as `beta`, branch-named alias |
+| `beta-<sha>` | Immutable per-commit pre-release |
 
 ## Project Structure
 
 ```
 wan-ip-check/
-├── main.go              # Entry point, HTTP clients, PBR, signal handling
-├── config.go            # Boot config, env-to-DB migration
-├── database.go          # SQLite schema, migrations, queries
-├── source.go            # Source model, IP detection (primary+fallback)
-├── dispatcher.go        # Cron scheduler, source→event→action dispatch
-├── action.go            # Action interface, registry, encryption helpers
-├── action_cfdns.go      # Cloudflare DNS executor
-├── action_cfgateway.go  # Cloudflare Gateway executor
-├── action_discord.go    # Discord webhook executor
-├── action_webhook.go    # Custom webhook with text/template
-├── crypto.go            # AES-256-GCM encryption
-├── server.go            # HTTP server, routing, middleware
-├── handlers_api.go      # REST API handlers
-├── handlers_ui.go       # Web UI handlers + HTMX partials
-├── templates/           # Go HTML templates (embedded)
-├── static/              # CSS + HTMX (embedded)
-├── Dockerfile           # Multi-stage build
-└── docker-compose.yml
+├── main.go                        # Entry point, signal handling, HTTP clients
+├── config.go                      # Boot config, env-to-DB migration
+├── database.go                    # SQLite schema, migrations, queries
+├── wan_interface.go               # WAN model, IP detection, schedule helpers
+├── dispatcher.go                  # Cron scheduler, PBRManager, event dispatch
+├── network_diagnostics.go         # Runtime / NET_ADMIN / gateway detection
+├── action.go                      # ActionExecutor interface, registry, crypto
+├── action_cfdns.go                # Cloudflare DNS (new name-based flow)
+├── action_cfgateway.go            # Cloudflare Zero Trust Gateway
+├── action_discord.go              # Discord webhook
+├── action_webhook.go              # HTTP webhook with template body
+├── crypto.go                      # AES-256-GCM
+├── server.go                      # HTTP server, routing, middleware
+├── handlers_api.go                # REST API handlers
+├── handlers_ui.go                 # Web UI + HTMX partial handlers
+├── templates/                     # Go HTML templates (embedded)
+│   ├── layout.html
+│   ├── wan_interfaces.html
+│   ├── wan_interface_form.html
+│   ├── actions.html
+│   ├── action_form.html
+│   ├── history.html
+│   ├── settings.html
+│   └── partials/
+│       ├── wan_interface_card.html
+│       ├── network_diagnostics.html
+│       ├── egress_fields.html
+│       ├── cloudflare_dns_fields.html
+│       ├── config_fields.html
+│       └── test_route_result.html
+├── static/                        # CSS + HTMX 2.0.4 (embedded)
+├── Dockerfile
+├── docker-compose.yml
+└── .github/workflows/
+    ├── docker-publish.yml         # main + v* tags → latest / X.Y.Z / X.Y
+    └── docker-beta.yml            # v2-dev → beta / v2-dev / beta-<sha>
 ```
+
+## Issues & Roadmap
+
+File bugs / feature requests at [github.com/AC13139/wan-ip-check/issues](https://github.com/AC13139/wan-ip-check/issues). Current open threads include IPv6 support (#28), event-history auto-recycling (#29), Settings About card (#30), timezone dropdown (#31), and the dashboard redesign (#27).
 
 ## License
 
-This project is licensed under the [GNU General Public License v3.0](LICENSE).
+[GNU General Public License v3.0](LICENSE).

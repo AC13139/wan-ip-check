@@ -15,19 +15,17 @@
       <div class="form-group">
         <label class="form-label">Type</label>
         {{if .IsEdit}}
-        <input type="text" class="form-input mono" value="{{.ActionType}}" disabled>
+        <input type="text" class="form-input" value="{{.TypeDisplayName}}" disabled
+               title="Internal type: {{.ActionType}}">
         <input type="hidden" name="type" value="{{.ActionType}}">
         {{else}}
-        <select name="type" class="form-select" required
-                hx-get="/ui/action-schema"
-                hx-target="#config-fields"
-                hx-swap="innerHTML"
-                hx-include="[name='type']">
+        <select name="type" class="form-select" required id="action-type-select">
           <option value="">Select type...</option>
           {{range .AllTypes}}
-          <option value="{{.}}" {{if eq . $.ActionType}}selected{{end}}>{{.}}</option>
+          <option value="{{.Type}}" data-description="{{.Description}}" {{if eq .Type $.ActionType}}selected{{end}}>{{.DisplayName}}</option>
           {{end}}
         </select>
+        <div id="action-type-description" class="form-help"></div>
         {{end}}
       </div>
     </div>
@@ -46,6 +44,10 @@
   <div class="card mb-lg">
     <h3 class="section-title">Configuration</h3>
     <div id="config-fields">
+      {{if .IsEdit}}
+      {{if .CustomFormHTML}}
+      {{.CustomFormHTML}}
+      {{else}}
       {{range .Schema}}
       <div class="form-group">
         <label class="form-label">{{.Label}}{{if .Required}} *{{end}}</label>
@@ -53,13 +55,13 @@
         <input type="password" name="config_{{.Name}}" class="form-input mono"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         {{else if eq .Type "textarea"}}
         <textarea name="config_{{.Name}}" class="form-textarea mono"
                   {{if .Required}}required{{end}}
-                  placeholder="{{.Placeholder}}">{{index $.ConfigValues .Name}}</textarea>
+                  placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>{{index $.ConfigValues .Name}}</textarea>
         {{else if eq .Type "select"}}
-        <select name="config_{{.Name}}" class="form-select">
+        <select name="config_{{.Name}}" class="form-select"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
           <option value="POST" {{if eq (index $.ConfigValues .Name) "POST"}}selected{{end}}>POST</option>
           <option value="GET" {{if eq (index $.ConfigValues .Name) "GET"}}selected{{end}}>GET</option>
           <option value="PUT" {{if eq (index $.ConfigValues .Name) "PUT"}}selected{{end}}>PUT</option>
@@ -69,20 +71,168 @@
         <input type="text" name="config_{{.Name}}" class="form-input mono"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         <div class="form-help">Comma-separated values</div>
         {{else}}
         <input type="text" name="config_{{.Name}}" class="form-input{{if .IsSecret}} mono{{end}}"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         {{end}}
         {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
       </div>
       {{end}}
-      {{if not .Schema}}
-      <p class="text-muted">Select an action type to see configuration fields.</p>
       {{end}}
+      {{else}}
+      {{.SchemaPanels}}
+      {{end}}
+    </div>
+  </div>
+  {{if not .IsEdit}}
+  <script>
+    (function () {
+      var sel = document.getElementById('action-type-select');
+      var wrap = document.getElementById('config-fields');
+      var desc = document.getElementById('action-type-description');
+      if (!sel || !wrap) return;
+      function apply() {
+        wrap.querySelectorAll('[data-action-type]').forEach(function (el) {
+          var active = el.getAttribute('data-action-type') === sel.value;
+          el.style.display = active ? '' : 'none';
+          el.querySelectorAll('input, select, textarea').forEach(function (inp) {
+            inp.disabled = !active;
+          });
+        });
+        if (desc) {
+          var opt = sel.options[sel.selectedIndex];
+          desc.textContent = opt ? (opt.getAttribute('data-description') || '') : '';
+        }
+      }
+      sel.addEventListener('change', apply);
+      apply();
+    })();
+  </script>
+  {{end}}
+
+  {{if .IsEdit}}
+  <input type="hidden" name="action_id" value="{{.Action.ID}}">
+  {{end}}
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Triggers</h3>
+    <div class="form-help">
+      When these WAN interface events occur, this action runs. Add a trigger for each WAN that should fire it.
+    </div>
+    <div id="triggers-list" class="triggers-list"></div>
+    <input type="hidden" name="triggers_json" id="triggers-json" value="[]">
+    <button type="button" id="add-trigger-btn" class="btn btn-secondary btn-sm">+ Add trigger</button>
+    {{if not .AllWANs}}
+    <div class="form-help">
+      No WAN interfaces defined yet. <a href="/wan-interfaces/new">Create one</a> first to add triggers.
+    </div>
+    {{end}}
+  </div>
+
+  <template id="trigger-row-tpl">
+    <div class="trigger-row">
+      <span class="trigger-label">Triggered by</span>
+      <select class="form-select trigger-wan" aria-label="WAN interface">
+        <option value="">— select WAN —</option>
+        {{range .AllWANs}}
+        <option value="{{.ID}}">{{.Name}}</option>
+        {{end}}
+      </select>
+      <span class="trigger-label">when</span>
+      <select class="form-select trigger-event" aria-label="Event type">
+        <option value="ip_changed">IP changes</option>
+        <option value="ip_unchanged_daily">Daily summary (no change)</option>
+        <option value="both">Both</option>
+      </select>
+      <button type="button" class="btn btn-sm btn-danger trigger-remove" title="Remove this trigger">×</button>
+    </div>
+  </template>
+
+  <script>
+  (function () {
+    var list = document.getElementById('triggers-list');
+    var hidden = document.getElementById('triggers-json');
+    var addBtn = document.getElementById('add-trigger-btn');
+    var tpl = document.getElementById('trigger-row-tpl');
+    if (!list || !hidden || !addBtn || !tpl) return;
+
+    function serialize() {
+      var rows = list.querySelectorAll('.trigger-row');
+      var data = [];
+      rows.forEach(function (row) {
+        var wanID = parseInt(row.querySelector('.trigger-wan').value || '0', 10);
+        if (!wanID) return;
+        data.push({
+          wan_interface_id: wanID,
+          trigger_on: row.querySelector('.trigger-event').value || 'ip_changed'
+        });
+      });
+      hidden.value = JSON.stringify(data);
+    }
+
+    function wireRow(row) {
+      row.querySelectorAll('select').forEach(function (el) {
+        el.addEventListener('change', serialize);
+      });
+      row.querySelector('.trigger-remove').addEventListener('click', function () {
+        row.remove();
+        serialize();
+      });
+    }
+
+    function addRow(existing) {
+      var node = tpl.content.cloneNode(true);
+      var row = node.querySelector('.trigger-row');
+      if (existing) {
+        row.querySelector('.trigger-wan').value = String(existing.WANInterfaceID || existing.wan_interface_id || '');
+        row.querySelector('.trigger-event').value = existing.TriggerOn || existing.trigger_on || 'ip_changed';
+      }
+      wireRow(row);
+      list.appendChild(node);
+    }
+
+    // Hydrate from server-rendered JSON (edit path)
+    try {
+      var initial = {{.TriggersJSON}};
+      if (Array.isArray(initial) && initial.length > 0) {
+        initial.forEach(addRow);
+      } else if (!{{if .IsEdit}}true{{else}}false{{end}}) {
+        addRow(); // one empty row on create form
+      }
+    } catch (e) { /* ignore */ }
+
+    addBtn.addEventListener('click', function () {
+      addRow();
+      serialize();
+    });
+
+    serialize();
+  })();
+  </script>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Validate Config</h3>
+    <div class="test-action-wrap">
+      <button type="button" class="btn btn-secondary btn-sm"
+              hx-post="/ui/action-test"
+              hx-target="#test-action-result"
+              hx-swap="innerHTML"
+              hx-include="closest form"
+              hx-indicator="#test-action-spinner"
+              hx-disabled-elt="this">
+        Test
+      </button>
+      <span id="test-action-spinner" class="htmx-indicator test-route-spinner">Testing…</span>
+      <span id="test-action-result" class="test-action-result"></span>
+    </div>
+    <div class="form-help">
+      Cloudflare DNS: read-only probe of token + zone + record names (no changes).
+      Discord / Webhook: sends a real test notification with synthetic IPs
+      (198.51.100.1 → 203.0.113.42). Never writes to history.
     </div>
   </div>
 

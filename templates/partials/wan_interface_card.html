@@ -1,0 +1,50 @@
+<div class="card{{if not .WANInterface.Enabled}} disabled{{end}}" id="wi-card-{{.WANInterface.ID}}" role="listitem">
+  <div class="card-header">
+    <div class="flex-center gap-sm">
+      <span class="status-dot {{.StatusClass}} pulse"></span>
+      <div>
+        <span class="card-title">{{.WANInterface.Name}}</span>
+        <div class="type-label mono-sm">{{.WANInterface.Schedule}}</div>
+      </div>
+    </div>
+    <label class="toggle">
+      <input type="checkbox" {{if .WANInterface.Enabled}}checked{{end}}
+             hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}/toggle"
+             hx-target="#wi-card-{{.WANInterface.ID}}"
+             hx-swap="outerHTML">
+      <span class="toggle-track"></span>
+      <span class="toggle-thumb"></span>
+    </label>
+  </div>
+  <div class="card-body">
+    {{if .IP}}
+    <div class="ip-display">{{.IP}}</div>
+    {{else}}
+    <div class="text-muted">No IP detected yet</div>
+    {{end}}
+    <div class="wi-meta-row">
+      <span class="badge {{.StatusBadgeClass}}">{{.StatusText}}</span>
+      {{if .LastCheck}}<span class="text-sm text-muted">Last check: {{.LastCheck}}</span>{{end}}
+      <span class="text-sm text-muted">{{.ActionCount}} linked action{{if ne .ActionCount 1}}s{{end}}</span>
+    </div>
+    {{if .LastError}}
+    <div class="wi-error-row" title="{{.LastError}}">
+      <span class="text-error text-sm"><strong>Error:</strong> {{.LastError}}</span>
+    </div>
+    {{end}}
+  </div>
+  <div class="card-footer">
+    <a href="/wan-interfaces/{{.WANInterface.ID}}" class="btn btn-sm btn-secondary">Edit</a>
+    <button class="btn btn-sm btn-secondary"
+            hx-post="/ui/wan-interfaces/{{.WANInterface.ID}}/check"
+            hx-target="#wi-card-{{.WANInterface.ID}}"
+            hx-swap="outerHTML"
+            hx-disabled-elt="this"
+            title="Run a manual IP check now">Check IP</button>
+    <button class="btn btn-sm btn-danger"
+            hx-delete="/ui/wan-interfaces/{{.WANInterface.ID}}"
+            hx-target="#wi-card-{{.WANInterface.ID}}"
+            hx-swap="delete"
+            hx-confirm="Delete WAN interface '{{.WANInterface.Name}}'?">Delete</button>
+  </div>
+</div>

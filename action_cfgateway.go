@@ -22,6 +22,12 @@ type cfGatewayConfig struct {
 
 func (e *CFGatewayExecutor) Type() string { return "cloudflare_gateway" }
 
+func (e *CFGatewayExecutor) DisplayName() string { return "Cloudflare Gateway Locations" }
+
+func (e *CFGatewayExecutor) Description() string {
+	return "Update the External IP on a Zero Trust Gateway location so DNS-filtering policies keep matching traffic from your WAN."
+}
+
 func (e *CFGatewayExecutor) SecretFields() []string { return []string{"api_token"} }
 
 func (e *CFGatewayExecutor) DefaultConfig() json.RawMessage {
@@ -31,9 +37,15 @@ func (e *CFGatewayExecutor) DefaultConfig() json.RawMessage {
 
 func (e *CFGatewayExecutor) ConfigSchema() []ConfigField {
 	return []ConfigField{
-		{Name: "api_token", Label: "API Token", Type: "password", Required: true, IsSecret: true, HelpText: "Cloudflare API token with Zero Trust edit permission"},
-		{Name: "account_id", Label: "Account ID", Type: "text", Required: true, HelpText: "Found in Cloudflare dashboard > account home"},
-		{Name: "location_id", Label: "Location ID", Type: "text", Required: true, HelpText: "Gateway DNS location ID"},
+		{Name: "api_token", Label: "API Token", Type: "password", Required: true, IsSecret: true,
+			Placeholder: "cloudflare-api-token",
+			HelpText:    "Cloudflare API token with Account:Zero Trust:Edit permission. Create at dash.cloudflare.com → Profile → API Tokens."},
+		{Name: "account_id", Label: "Account ID", Type: "text", Required: true,
+			Placeholder: "32-character hex string",
+			HelpText:    "Found in Cloudflare dashboard → home → right sidebar under Account Details."},
+		{Name: "location_id", Label: "Location ID", Type: "text", Required: true,
+			Placeholder: "location UUID",
+			HelpText:    "Zero Trust → Gateway → DNS Locations → pick your location → copy the ID from the URL."},
 	}
 }
 

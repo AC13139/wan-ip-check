@@ -1,20 +1,11 @@
-{{define "header-actions"}}
-<div class="flex gap-sm">
-  {{range .ActionTypes}}
-  <a href="/actions/new?type={{.}}" class="btn btn-sm btn-secondary">+ {{.}}</a>
-  {{end}}
-</div>
-{{end}}
-
 {{define "content"}}
-{{if .Actions}}
-<div class="card-grid">
+<div class="card-grid" role="list">
   {{range .Actions}}
-  <div class="card{{if not .Action.Enabled}} disabled{{end}}" id="action-card-{{.Action.ID}}">
+  <div class="card{{if not .Action.Enabled}} disabled{{end}}" id="action-card-{{.Action.ID}}" role="listitem">
     <div class="card-header">
       <div>
         <span class="card-title">{{.Action.Name}}</span>
-        <div class="type-label">{{.Action.Type}}</div>
+        <div class="type-label" title="Internal type: {{.Action.Type}}">{{.TypeDisplayName}}</div>
       </div>
       <label class="toggle">
         <input type="checkbox" {{if .Action.Enabled}}checked{{end}}
@@ -26,21 +17,23 @@
       </label>
     </div>
     <div class="card-body">
-      {{if .LinkedSources}}
+      {{if .LinkedWANInterfaces}}
       <div class="text-sm text-secondary mb-sm">
-        Linked from: {{range $i, $s := .LinkedSources}}{{if $i}}, {{end}}{{$s}}{{end}}
+        Linked from: {{range $i, $s := .LinkedWANInterfaces}}{{if $i}}, {{end}}{{$s}}{{end}}
       </div>
       {{else}}
-      <div class="text-sm text-muted mb-sm">Not linked to any source</div>
+      <div class="text-sm text-muted mb-sm">Not linked to any WAN interface</div>
       {{end}}
+      <div id="execute-result-{{.Action.ID}}" class="execute-result"></div>
     </div>
     <div class="card-footer">
       <a href="/actions/{{.Action.ID}}" class="btn btn-sm btn-secondary">Edit</a>
       <button class="btn btn-sm btn-secondary"
-              hx-post="/ui/actions/{{.Action.ID}}/test"
-              hx-target="#test-result-{{.Action.ID}}"
-              hx-swap="innerHTML">Test</button>
-      <span id="test-result-{{.Action.ID}}"></span>
+              {{if not .LinkedWANInterfaces}}disabled title="Link a WAN interface first"{{else}}title="Runs this action now for each linked WAN using its current observed IP"{{end}}
+              hx-post="/ui/actions/{{.Action.ID}}/execute"
+              hx-target="#execute-result-{{.Action.ID}}"
+              hx-swap="innerHTML"
+              hx-disabled-elt="this">Execute</button>
       <button class="btn btn-sm btn-danger"
               hx-delete="/ui/actions/{{.Action.ID}}"
               hx-target="#action-card-{{.Action.ID}}"
@@ -49,11 +42,9 @@
     </div>
   </div>
   {{end}}
+  <a class="card card-add" href="/actions/new" role="listitem" aria-label="Add new action">
+    <span class="card-add-plus">+</span>
+    <span class="card-add-label">Add action</span>
+  </a>
 </div>
-{{else}}
-<div class="empty-state">
-  <p>No actions configured. Actions define what happens when your IP changes.</p>
-  <a href="/actions/new?type=discord" class="btn btn-primary">Add Discord Action</a>
-</div>
-{{end}}
 {{end}}
