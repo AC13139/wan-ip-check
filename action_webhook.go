@@ -44,6 +44,12 @@ var webhookFuncs = template.FuncMap{
 
 func (e *WebhookExecutor) Type() string { return "webhook" }
 
+func (e *WebhookExecutor) DisplayName() string { return "HTTP Webhook" }
+
+func (e *WebhookExecutor) Description() string {
+	return "POST (or PUT/PATCH/GET) a configurable JSON or text payload to any HTTP endpoint on IP change."
+}
+
 func (e *WebhookExecutor) SecretFields() []string { return nil }
 
 func (e *WebhookExecutor) DefaultConfig() json.RawMessage {
@@ -58,10 +64,17 @@ func (e *WebhookExecutor) DefaultConfig() json.RawMessage {
 
 func (e *WebhookExecutor) ConfigSchema() []ConfigField {
 	return []ConfigField{
-		{Name: "url", Label: "URL", Type: "text", Required: true, Placeholder: "https://example.com/webhook"},
-		{Name: "method", Label: "HTTP Method", Type: "select", Required: true, Placeholder: "POST"},
-		{Name: "headers", Label: "Headers", Type: "textarea", Required: false, HelpText: "JSON object of header key-value pairs"},
-		{Name: "body_template", Label: "Body Template", Type: "textarea", Required: false, HelpText: "Go template with {{.NewIP}}, {{.OldIP}}, {{.WANInterfaceName}}, {{.Event}}, {{.Timestamp}}"},
+		{Name: "url", Label: "URL", Type: "text", Required: true,
+			Placeholder: "https://example.com/webhook",
+			HelpText:    "Target endpoint. Supports http:// or https:// and any port."},
+		{Name: "method", Label: "HTTP Method", Type: "select", Required: true, Placeholder: "POST",
+			HelpText: "POST is the common default. Use PUT/PATCH for REST APIs that expect them; GET has no body."},
+		{Name: "headers", Label: "Headers", Type: "textarea", Required: false,
+			Placeholder: "{\"Authorization\":\"Bearer ...\",\"X-Custom\":\"value\"}",
+			HelpText:    "JSON object of header key-value pairs. Added to every request."},
+		{Name: "body_template", Label: "Body Template", Type: "textarea", Required: false,
+			Placeholder: "{\"ip\":\"{{.NewIP}}\",\"old\":\"{{.OldIP}}\"}",
+			HelpText:    "Go template with {{.NewIP}}, {{.OldIP}}, {{.WANInterfaceName}}, {{.Event}}, {{.Timestamp}}."},
 	}
 }
 

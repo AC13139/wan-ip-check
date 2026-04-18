@@ -5,7 +5,7 @@
     <div class="card-header">
       <div>
         <span class="card-title">{{.Action.Name}}</span>
-        <div class="type-label">{{.Action.Type}}</div>
+        <div class="type-label" title="Internal type: {{.Action.Type}}">{{.TypeDisplayName}}</div>
       </div>
       <label class="toggle">
         <input type="checkbox" {{if .Action.Enabled}}checked{{end}}

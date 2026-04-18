@@ -344,14 +344,19 @@ func (s *Server) handleActionsPage(w http.ResponseWriter, r *http.Request) {
 	actions, _ := s.app.db.ListActions()
 
 	type ActionDisplay struct {
-		Action            Action
+		Action              Action
+		TypeDisplayName     string
 		LinkedWANInterfaces []string
 	}
 	var displays []ActionDisplay
 	for _, a := range actions {
 		a.ConfigJSON = maskSecrets(a.Type, a.ConfigJSON, s.app.registry)
 		wanInterfaces, _ := s.app.db.GetActionLinkedWANInterfaces(a.ID)
-		displays = append(displays, ActionDisplay{Action: a, LinkedWANInterfaces: wanInterfaces})
+		displays = append(displays, ActionDisplay{
+			Action:              a,
+			TypeDisplayName:     s.app.registry.DisplayName(a.Type),
+			LinkedWANInterfaces: wanInterfaces,
+		})
 	}
 
 	data := struct {
@@ -377,13 +382,14 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 		IsEdit        bool
 		ActionType    string
 		Schema        []ConfigField
-		ConfigValues  map[string]interface{}
-		AllTypes      []string
-		SchemaPanels  template.HTML // pre-rendered panels for all types (new form only)
+		ConfigValues    map[string]interface{}
+		AllTypes        []ActionTypeInfo
+		TypeDisplayName string
+		SchemaPanels    template.HTML // pre-rendered panels for all types (new form only)
 	}{
 		PageData:     PageData{Active: "actions", CSRFToken: getCSRFToken(r)},
 		IsEdit:       isEdit,
-		AllTypes:     s.app.registry.Types(),
+		AllTypes:     s.app.registry.TypeInfos(),
 		ConfigValues: make(map[string]interface{}),
 	}
 
@@ -396,6 +402,7 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 		}
 		data.Action = action
 		data.ActionType = action.Type
+		data.TypeDisplayName = s.app.registry.DisplayName(action.Type)
 		data.Title = "Edit Action: " + action.Name
 
 		masked := maskSecrets(action.Type, action.ConfigJSON, s.app.registry)

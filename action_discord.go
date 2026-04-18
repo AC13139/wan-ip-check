@@ -27,6 +27,12 @@ type discordConfig struct {
 
 func (e *DiscordExecutor) Type() string { return "discord" }
 
+func (e *DiscordExecutor) DisplayName() string { return "Discord Webhook" }
+
+func (e *DiscordExecutor) Description() string {
+	return "Post a rich-embed notification to a Discord channel when the WAN IP changes (or as a daily summary)."
+}
+
 func (e *DiscordExecutor) SecretFields() []string { return []string{"webhook_url"} }
 
 func (e *DiscordExecutor) DefaultConfig() json.RawMessage {
@@ -36,8 +42,12 @@ func (e *DiscordExecutor) DefaultConfig() json.RawMessage {
 
 func (e *DiscordExecutor) ConfigSchema() []ConfigField {
 	return []ConfigField{
-		{Name: "webhook_url", Label: "Webhook URL", Type: "password", Required: true, IsSecret: true, HelpText: "Discord webhook URL (Settings > Integrations > Webhooks)"},
-		{Name: "proxy_url", Label: "Proxy URL", Type: "text", Required: false, HelpText: "HTTP proxy for Discord access (set via DISCORD_PROXY env var)"},
+		{Name: "webhook_url", Label: "Webhook URL", Type: "password", Required: true, IsSecret: true,
+			Placeholder: "https://discord.com/api/webhooks/...",
+			HelpText:    "Discord channel → Edit Channel → Integrations → Webhooks → New Webhook → Copy URL."},
+		{Name: "proxy_url", Label: "Proxy URL (optional)", Type: "text", Required: false,
+			Placeholder: "http://proxy-host:3128",
+			HelpText:    "HTTP proxy for regions where Discord is blocked. Usually set globally via DISCORD_PROXY env var."},
 	}
 }
 

@@ -24,6 +24,12 @@ type cfDNSConfig struct {
 
 func (e *CFDNSExecutor) Type() string { return "cloudflare_dns" }
 
+func (e *CFDNSExecutor) DisplayName() string { return "Cloudflare DNS Record" }
+
+func (e *CFDNSExecutor) Description() string {
+	return "Update DNS A records (e.g. home.example.com) to point at your current WAN IP whenever it changes."
+}
+
 func (e *CFDNSExecutor) SecretFields() []string { return []string{"api_token"} }
 
 func (e *CFDNSExecutor) DefaultConfig() json.RawMessage {
@@ -34,9 +40,15 @@ func (e *CFDNSExecutor) DefaultConfig() json.RawMessage {
 
 func (e *CFDNSExecutor) ConfigSchema() []ConfigField {
 	return []ConfigField{
-		{Name: "api_token", Label: "API Token", Type: "password", Required: true, IsSecret: true, HelpText: "Cloudflare API token with DNS edit permission"},
-		{Name: "zone_id", Label: "Zone ID", Type: "text", Required: true, HelpText: "Found in Cloudflare dashboard > domain > Overview"},
-		{Name: "record_ids", Label: "DNS Record IDs", Type: "tags", Required: true, HelpText: "Comma-separated A record IDs to update"},
+		{Name: "api_token", Label: "API Token", Type: "password", Required: true, IsSecret: true,
+			Placeholder: "cloudflare-api-token",
+			HelpText:    "Create at dash.cloudflare.com → Profile → API Tokens. Requires Zone:Read + DNS:Edit permissions."},
+		{Name: "zone_id", Label: "Zone ID", Type: "text", Required: true,
+			Placeholder: "32-character hex string",
+			HelpText:    "Found in Cloudflare dashboard → your domain → Overview, right sidebar."},
+		{Name: "record_ids", Label: "DNS Record IDs", Type: "tags", Required: true,
+			Placeholder: "rec-id-1, rec-id-2",
+			HelpText:    "Comma-separated A record IDs to update. List with: curl -H 'Authorization: Bearer <token>' https://api.cloudflare.com/client/v4/zones/<zone>/dns_records"},
 	}
 }
 

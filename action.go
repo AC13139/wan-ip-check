@@ -71,6 +71,14 @@ type ActionExecutor interface {
 	// Type returns the action type identifier (e.g., "cloudflare_dns").
 	Type() string
 
+	// DisplayName returns a human-friendly name for UI rendering (e.g.,
+	// "Cloudflare DNS Record"). Type() stays as the stable internal ID.
+	DisplayName() string
+
+	// Description returns a one-sentence explanation shown under the Action
+	// Type dropdown to help users pick the right integration.
+	Description() string
+
 	// Execute runs the action with the given event and config.
 	Execute(ctx context.Context, event IPEvent, config json.RawMessage) error
 
@@ -129,6 +137,43 @@ func (r *ActionRegistry) Types() []string {
 		types = append(types, t)
 	}
 	return types
+}
+
+// ActionTypeInfo is a UI-ready summary of a registered action type.
+type ActionTypeInfo struct {
+	Type        string // stable internal ID (used in DB / API)
+	DisplayName string
+	Description string
+}
+
+// TypeInfos returns UI-ready info for all registered executors, sorted by
+// DisplayName for a stable dropdown order.
+func (r *ActionRegistry) TypeInfos() []ActionTypeInfo {
+	infos := make([]ActionTypeInfo, 0, len(r.executors))
+	for _, e := range r.executors {
+		infos = append(infos, ActionTypeInfo{
+			Type:        e.Type(),
+			DisplayName: e.DisplayName(),
+			Description: e.Description(),
+		})
+	}
+	// Stable order by DisplayName
+	for i := 1; i < len(infos); i++ {
+		for j := i; j > 0 && infos[j-1].DisplayName > infos[j].DisplayName; j-- {
+			infos[j-1], infos[j] = infos[j], infos[j-1]
+		}
+	}
+	return infos
+}
+
+// DisplayName returns the human-friendly name for an action type, or the
+// type ID itself if no executor is registered (defensive fallback for
+// historical rows whose executor was removed).
+func (r *ActionRegistry) DisplayName(actionType string) string {
+	if e, ok := r.executors[actionType]; ok {
+		return e.DisplayName()
+	}
+	return actionType
 }
 
 const secretMask = "•••••"

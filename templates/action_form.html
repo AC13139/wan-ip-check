@@ -15,15 +15,17 @@
       <div class="form-group">
         <label class="form-label">Type</label>
         {{if .IsEdit}}
-        <input type="text" class="form-input mono" value="{{.ActionType}}" disabled>
+        <input type="text" class="form-input" value="{{.TypeDisplayName}}" disabled
+               title="Internal type: {{.ActionType}}">
         <input type="hidden" name="type" value="{{.ActionType}}">
         {{else}}
         <select name="type" class="form-select" required id="action-type-select">
           <option value="">Select type...</option>
           {{range .AllTypes}}
-          <option value="{{.}}" {{if eq . $.ActionType}}selected{{end}}>{{.}}</option>
+          <option value="{{.Type}}" data-description="{{.Description}}" {{if eq .Type $.ActionType}}selected{{end}}>{{.DisplayName}}</option>
           {{end}}
         </select>
+        <div id="action-type-description" class="form-help"></div>
         {{end}}
       </div>
     </div>
@@ -50,13 +52,13 @@
         <input type="password" name="config_{{.Name}}" class="form-input mono"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         {{else if eq .Type "textarea"}}
         <textarea name="config_{{.Name}}" class="form-textarea mono"
                   {{if .Required}}required{{end}}
-                  placeholder="{{.Placeholder}}">{{index $.ConfigValues .Name}}</textarea>
+                  placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>{{index $.ConfigValues .Name}}</textarea>
         {{else if eq .Type "select"}}
-        <select name="config_{{.Name}}" class="form-select">
+        <select name="config_{{.Name}}" class="form-select"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
           <option value="POST" {{if eq (index $.ConfigValues .Name) "POST"}}selected{{end}}>POST</option>
           <option value="GET" {{if eq (index $.ConfigValues .Name) "GET"}}selected{{end}}>GET</option>
           <option value="PUT" {{if eq (index $.ConfigValues .Name) "PUT"}}selected{{end}}>PUT</option>
@@ -66,13 +68,13 @@
         <input type="text" name="config_{{.Name}}" class="form-input mono"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         <div class="form-help">Comma-separated values</div>
         {{else}}
         <input type="text" name="config_{{.Name}}" class="form-input{{if .IsSecret}} mono{{end}}"
                value="{{index $.ConfigValues .Name}}"
                {{if .Required}}required{{end}}
-               placeholder="{{.Placeholder}}">
+               placeholder="{{.Placeholder}}"{{if .HelpText}} title="{{.HelpText}}"{{end}}>
         {{end}}
         {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
       </div>
@@ -87,6 +89,7 @@
     (function () {
       var sel = document.getElementById('action-type-select');
       var wrap = document.getElementById('config-fields');
+      var desc = document.getElementById('action-type-description');
       if (!sel || !wrap) return;
       function apply() {
         wrap.querySelectorAll('[data-action-type]').forEach(function (el) {
@@ -96,6 +99,10 @@
             inp.disabled = !active;
           });
         });
+        if (desc) {
+          var opt = sel.options[sel.selectedIndex];
+          desc.textContent = opt ? (opt.getAttribute('data-description') || '') : '';
+        }
       }
       sel.addEventListener('change', apply);
       apply();
