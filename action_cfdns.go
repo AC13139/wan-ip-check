@@ -198,6 +198,163 @@ func (e *CFDNSExecutor) Execute(ctx context.Context, event IPEvent, raw json.Raw
 		len(ok), len(ok)+len(failed), strings.Join(failed, "; "))
 }
 
+// TestConfig performs a read-only probe against Cloudflare: verifies the
+// token, confirms the zone is accessible, lists the zone's A records, and
+// reports which configured record names already exist vs. will be created
+// on the first real run. No mutations. Implements the optional action-test
+// interface consumed by handleUITestAction via type assertion.
+func (e *CFDNSExecutor) TestConfig(ctx context.Context, raw json.RawMessage) (string, error) {
+	var cfg cfDNSConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return "", fmt.Errorf("parsing config: %w", err)
+	}
+	if cfg.APIToken == "" {
+		return "", fmt.Errorf("api_token is required")
+	}
+	if cfg.ZoneID == "" {
+		return "", fmt.Errorf("zone_id is required")
+	}
+
+	// 1. Verify token.
+	if err := verifyCloudflareToken(ctx, e.client, cfg.APIToken); err != nil {
+		return "", fmt.Errorf("token verification failed: %w", err)
+	}
+
+	// 2. Confirm zone is accessible and get its canonical name (authoritative
+	// for record-name canonicalization).
+	zoneName, err := fetchZoneName(ctx, e.client, cfg.APIToken, cfg.ZoneID)
+	if err != nil {
+		return "", fmt.Errorf("zone lookup failed: %w", err)
+	}
+	if cfg.ZoneName == "" {
+		cfg.ZoneName = zoneName
+	}
+
+	// 3. Resolve configured records against the zone's existing A records.
+	// Legacy record_ids configs have no record names to resolve — report
+	// that cleanly so the user knows Test applies only after migrating.
+	if len(cfg.Records) == 0 && len(cfg.RecordIDs) > 0 {
+		return fmt.Sprintf("Token OK • Zone %s • Legacy record IDs: %d (save the new form to run a full probe)",
+			zoneName, len(cfg.RecordIDs)), nil
+	}
+	if len(cfg.Records) == 0 {
+		return "", fmt.Errorf("add at least one DNS record")
+	}
+
+	// List all records, not just A. Lets us surface CNAME conflicts: DNS
+	// rules forbid A and CNAME at the same name, so a configured A that
+	// collides with an existing CNAME would fail at create time — better
+	// to flag it here.
+	existing, err := e.listAllRecords(ctx, cfg.APIToken, cfg.ZoneID)
+	if err != nil {
+		return "", fmt.Errorf("listing zone records: %w", err)
+	}
+	byName := make(map[string][]cfRecordSummary, len(existing))
+	for _, r := range existing {
+		byName[r.Name] = append(byName[r.Name], r)
+	}
+
+	var exists, create, conflicts []string
+	for _, rec := range cfg.Records {
+		full := canonicalizeRecordName(rec.Name, zoneName)
+		if full == "" {
+			return "", fmt.Errorf("record %q resolves to empty name", rec.Name)
+		}
+		hasA := false
+		hasCNAME := false
+		for _, m := range byName[full] {
+			switch m.Type {
+			case "A":
+				hasA = true
+			case "CNAME":
+				hasCNAME = true
+			}
+		}
+		switch {
+		case hasCNAME:
+			conflicts = append(conflicts, rec.Name+" (existing CNAME)")
+		case hasA:
+			exists = append(exists, rec.Name)
+		default:
+			create = append(create, rec.Name)
+		}
+	}
+
+	if len(conflicts) > 0 {
+		return "", fmt.Errorf("record name conflict (DNS forbids A alongside CNAME): %s", strings.Join(conflicts, ", "))
+	}
+
+	summary := fmt.Sprintf("Token OK • Zone %s • %d exist", zoneName, len(exists))
+	if len(create) > 0 {
+		summary += fmt.Sprintf(" • %d will be created (%s)", len(create), strings.Join(create, ", "))
+	}
+	// Cloudflare's /user/tokens/verify does not report scopes, so Read
+	// access passing does not prove DNS:Edit is granted. Note the gap so
+	// users are not surprised when Execute fails on the first real run.
+	summary += " • write scope not verified (needs DNS:Edit for updates/creates)"
+	return summary, nil
+}
+
+// verifyCloudflareToken calls /user/tokens/verify. Reports any non-success
+// envelope as an error with the Cloudflare-provided message.
+func verifyCloudflareToken(ctx context.Context, client *http.Client, token string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/user/tokens/verify", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		Success bool    `json:"success"`
+		Errors  []cfErr `json:"errors"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("decoding verify response: %w", err)
+	}
+	if !envelope.Success {
+		if len(envelope.Errors) > 0 {
+			return fmt.Errorf("%s", envelope.Errors[0].Message)
+		}
+		return fmt.Errorf("token invalid")
+	}
+	return nil
+}
+
+// fetchZoneName returns the zone's canonical domain (e.g. "example.com"). Used
+// by TestConfig so we can resolve user-entered short names the same way the
+// Execute path will at run time.
+func fetchZoneName(ctx context.Context, client *http.Client, token, zoneID string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfAPIBase+"/zones/"+zoneID, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var envelope struct {
+		Success bool    `json:"success"`
+		Errors  []cfErr `json:"errors"`
+		Result  cfZone  `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return "", fmt.Errorf("decoding zone response: %w", err)
+	}
+	if !envelope.Success {
+		if len(envelope.Errors) > 0 {
+			return "", fmt.Errorf("%s", envelope.Errors[0].Message)
+		}
+		return "", fmt.Errorf("zone not found")
+	}
+	return envelope.Result.Name, nil
+}
+
 // executeLegacy runs the pre-migration record_ids path so existing saved
 // actions keep working until the user resaves through the new form.
 func (e *CFDNSExecutor) executeLegacy(ctx context.Context, cfg cfDNSConfig, newIP string) error {
@@ -313,12 +470,29 @@ func ListCloudflareZones(ctx context.Context, client *http.Client, token string)
 	return all, nil
 }
 
+// listAllRecords fetches every DNS record in the zone regardless of type.
+// Used by TestConfig to detect A-vs-CNAME collisions that listARecords
+// would miss.
+func (e *CFDNSExecutor) listAllRecords(ctx context.Context, token, zoneID string) ([]cfRecordSummary, error) {
+	return e.listRecordsByType(ctx, token, zoneID, "")
+}
+
 // listARecords fetches all type-A DNS records in a zone, paginating.
 func (e *CFDNSExecutor) listARecords(ctx context.Context, token, zoneID string) ([]cfRecordSummary, error) {
+	return e.listRecordsByType(ctx, token, zoneID, "A")
+}
+
+// listRecordsByType fetches DNS records optionally filtered by type. Shared
+// paginator for listARecords and listAllRecords.
+func (e *CFDNSExecutor) listRecordsByType(ctx context.Context, token, zoneID, recordType string) ([]cfRecordSummary, error) {
 	var all []cfRecordSummary
 	page := 1
 	for {
-		url := fmt.Sprintf("%s/zones/%s/dns_records?type=A&per_page=100&page=%d", cfAPIBase, zoneID, page)
+		typeQS := ""
+		if recordType != "" {
+			typeQS = "&type=" + recordType
+		}
+		url := fmt.Sprintf("%s/zones/%s/dns_records?per_page=100&page=%d%s", cfAPIBase, zoneID, page, typeQS)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err

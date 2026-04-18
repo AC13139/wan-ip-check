@@ -735,6 +735,29 @@ func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prefer a read-only TestConfig probe when the executor provides one
+	// (currently: Cloudflare DNS). Otherwise fall back to a synthetic-IP
+	// Execute (Discord/Webhook — sends a real test notification).
+	if tester, ok := executor.(interface {
+		TestConfig(context.Context, json.RawMessage) (string, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		summary, err := tester.TestConfig(ctx, decrypted)
+		if err != nil {
+			fmt.Fprintf(w, `<span class="badge badge-error">✗ %s</span>`,
+				template.HTMLEscapeString(err.Error()))
+			return
+		}
+		msg := summary
+		if msg == "" {
+			msg = "config OK"
+		}
+		fmt.Fprintf(w, `<span class="badge badge-success">✓ %s</span>`,
+			template.HTMLEscapeString(msg))
+		return
+	}
+
 	event := IPEvent{
 		WANInterfaceName: "Test",
 		EventType:        "ip_changed",
