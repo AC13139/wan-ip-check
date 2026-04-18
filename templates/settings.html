@@ -1,8 +1,9 @@
 {{define "content"}}
-<div class="card mb-lg" id="settings-form">
-  <h3 class="section-title">Global Settings</h3>
-  <form hx-put="/ui/settings" hx-target="#settings-form" hx-swap="outerHTML">
-    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<form hx-put="/ui/settings" hx-target="body" hx-swap="outerHTML" id="settings-form">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+  <div class="card mb-lg">
+    <h3 class="section-title">Global Settings</h3>
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Daily Summary Time (HHMM)</label>
@@ -25,9 +26,61 @@
         <div class="form-help">IANA timezone with current UTC offset. Pick "Local" to follow the server's timezone.</div>
       </div>
     </div>
+  </div>
+
+  <div class="card mb-lg">
+    <h3 class="section-title">History Retention</h3>
+    <div class="form-help">
+      Per-outcome TTLs for <strong>IP check</strong> and <strong>Action run</strong> rows. The hourly sweep deletes rows older than the TTL. Pick <em>Never</em> to keep a bucket forever.
+    </div>
+    <table class="retention-table">
+      <thead>
+        <tr><th>Bucket</th><th>Keep for</th><th></th></tr>
+      </thead>
+      <tbody>
+        {{range .RetentionRows}}
+        <tr>
+          <td>
+            <div class="retention-label">{{.Label}}</div>
+            <div class="text-sm text-muted">{{.Help}}</div>
+          </td>
+          <td>
+            <div class="retention-inputs">
+              <input type="number" name="{{.Key}}_value" class="form-input" min="0" value="{{.Value}}"
+                     {{if eq .Unit "never"}}disabled{{end}}>
+              <select name="{{.Key}}_unit" class="form-select">
+                <option value="minutes" {{if eq .Unit "minutes"}}selected{{end}}>Minutes</option>
+                <option value="hours" {{if eq .Unit "hours"}}selected{{end}}>Hours</option>
+                <option value="days" {{if eq .Unit "days"}}selected{{end}}>Days</option>
+                <option value="never" {{if eq .Unit "never"}}selected{{end}}>Never (keep forever)</option>
+              </select>
+            </div>
+          </td>
+          <td></td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="flex gap-sm">
     <button type="submit" class="btn btn-primary">Save Settings</button>
-  </form>
-</div>
+  </div>
+</form>
+
+<script>
+(function () {
+  // Gray out the number input when the unit is "Never".
+  document.querySelectorAll('.retention-inputs').forEach(function (row) {
+    var num = row.querySelector('input[type="number"]');
+    var sel = row.querySelector('select');
+    if (!num || !sel) return;
+    function sync() { num.disabled = sel.value === 'never'; }
+    sel.addEventListener('change', sync);
+    sync();
+  });
+})();
+</script>
 
 <div class="card mb-lg">
   <h3 class="section-title">Encryption</h3>

@@ -277,9 +277,35 @@ func (d *Dispatcher) startCron(ctx context.Context) error {
 		d.logger.Info("scheduled WAN interface", "wan_interface_id", w.ID, "name", w.Name, "schedule", w.Schedule, "timezone", loc)
 	}
 
+	// Hourly history sweep per the retention config (#29).
+	if _, err := d.cron.AddFunc("0 * * * *", func() { d.runHistorySweep() }); err != nil {
+		d.logger.Warn("failed to register history sweep job", "error", err)
+	}
+
 	d.cron.Start()
 	d.logger.Info("dispatcher started", "wan_interfaces", len(d.entryMap))
 	return nil
+}
+
+// runHistorySweep prunes expired wan_interface_checks and action_runs rows
+// per the configured retention. Logs per-bucket delete counts when any rows
+// were removed.
+func (d *Dispatcher) runHistorySweep() {
+	r := d.db.LoadHistoryRetention()
+	stats, err := d.db.PruneHistoryByTTL(r)
+	if err != nil {
+		d.logger.Warn("history sweep failed", "error", err)
+		return
+	}
+	total := stats.CheckOK + stats.CheckChanged + stats.CheckFailed +
+		stats.ActionSuccess + stats.ActionFailed
+	if total == 0 {
+		return
+	}
+	d.logger.Info("history sweep",
+		"check_ok", stats.CheckOK, "check_changed", stats.CheckChanged,
+		"check_failed", stats.CheckFailed,
+		"action_success", stats.ActionSuccess, "action_failed", stats.ActionFailed)
 }
 
 // checkWANInterface runs the IP detection + action dispatch cycle for a
@@ -412,10 +438,8 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 		d.checkDailySummary(ctx, wi, state, newIP, logger)
 	}
 
-	// Prune old action_runs to prevent unbounded growth (keep last 10000)
-	if err := d.db.PruneActionRuns(10000); err != nil {
-		logger.Warn("failed to prune action runs", "error", err)
-	}
+	// History retention is handled by the hourly sweep (#29). The old
+	// blanket 10k-row cap on action_runs is gone.
 }
 
 // checkDailySummary sends the daily "no change" notification if conditions are met.

@@ -27,12 +27,18 @@
       {{end}}
       <div class="wi-meta-row">
         <span class="badge {{.StatusBadgeClass}}">{{.StatusText}}</span>
+        {{if .Stale}}<span class="badge badge-warning" title="No successful check for {{.StaleAge}}">stale · {{.StaleAge}}</span>{{end}}
         {{if .LastCheck}}<span class="text-sm text-muted">Last check: {{.LastCheck}}</span>{{end}}
         <span class="text-sm text-muted">{{.ActionCount}} linked action{{if ne .ActionCount 1}}s{{end}}</span>
       </div>
       {{if .LastError}}
       <div class="wi-error-row" title="{{.LastError}}">
         <span class="text-error text-sm"><strong>Error:</strong> {{.LastError}}</span>
+      </div>
+      {{end}}
+      {{if .IPAdvisory}}
+      <div class="wi-advisory-row" title="{{.IPAdvisory}}">
+        <span class="text-warning text-sm"><strong>Note:</strong> {{.IPAdvisory}}</span>
       </div>
       {{end}}
     </div>

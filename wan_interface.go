@@ -47,6 +47,11 @@ type WANInterfaceConfig struct {
 	Strategy    string       `json:"strategy"`        // "fallback" or "single"
 	TimeoutSecs int          `json:"timeout_seconds"`
 	Egress      EgressConfig `json:"egress"`
+
+	// StaleAfterSeconds: show a stale warning on the WAN card when the
+	// last successful check is older than this. 0 = disabled (#15).
+	StaleAfterSeconds int `json:"stale_after_seconds,omitempty"`
+
 	// Deprecated: kept for backward-compat JSON loading
 	BindInterface string `json:"bind_interface,omitempty"`
 	BindAddress   string `json:"bind_address,omitempty"`
@@ -304,6 +309,57 @@ func buildClientWithLocalAddr(addr string, timeout time.Duration) *http.Client {
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
+// --- IP classification (#13) ---
+
+// cgnatNet is the RFC 6598 shared address space used by Carrier-Grade NAT.
+// An observed WAN IP inside this range means the user is behind a CGNAT
+// provider and inbound connections probably will not work even though DNS
+// updates succeed.
+var cgnatNet = mustCIDR("100.64.0.0/10")
+
+// privateNets are RFC 1918 ranges. A "WAN IP" inside them means the
+// detection probe came back with a LAN address — egress routing is
+// misconfigured or an internal reverse proxy is answering the probe.
+var privateNets = []*net.IPNet{
+	mustCIDR("10.0.0.0/8"),
+	mustCIDR("172.16.0.0/12"),
+	mustCIDR("192.168.0.0/16"),
+}
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic("bad CIDR constant: " + s)
+	}
+	return n
+}
+
+// IPAdvisory classifies an observed IP and returns a short warning string
+// when the address is CGNAT, RFC 1918, loopback, or invalid. Empty string
+// means a normal public IP.
+func IPAdvisory(ipStr string) string {
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if ip == nil {
+		return ""
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return ""
+	}
+	if ip4.IsLoopback() {
+		return "Loopback address — the probe returned 127.x.x.x; egress is broken."
+	}
+	if cgnatNet.Contains(ip4) {
+		return "CGNAT address (100.64.0.0/10) — your ISP shares this IP with other subscribers. DNS updates succeed but inbound connections will not work."
+	}
+	for _, n := range privateNets {
+		if n.Contains(ip4) {
+			return "Private RFC 1918 address — the probe returned a LAN IP, not a public IP. Check egress routing (proxy/gateway/interface binding)."
+		}
+	}
+	return ""
 }
 
 // --- Schedule helpers: simplified dropdown (value, unit) ↔ cron ---

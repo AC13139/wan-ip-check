@@ -75,6 +75,14 @@
                min="1" max="60">
       </div>
     </div>
+    <div class="form-group">
+      <label class="form-label">Stale warning threshold (minutes)</label>
+      <input type="number" name="stale_after_minutes" class="form-input"
+             value="{{if .IsEdit}}{{.StaleAfterMinutes}}{{else}}0{{end}}"
+             min="0" max="10080"
+             title="Show a 'stale' warning on the WAN card when the last successful check is older than this. 0 disables the warning.">
+      <div class="form-help">Show a stale warning on the WAN card when no successful check has happened for this many minutes. Set to 0 to disable.</div>
+    </div>
   </div>
 
   <div class="card mb-lg">

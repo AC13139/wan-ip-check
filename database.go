@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -375,15 +376,29 @@ func (db *DB) GetWANInterfaceState(wanInterfaceID int64) (*WANInterfaceState, er
 	ws.LastSummaryDate = summaryDate.String
 	ws.LastError = lastErr.String
 	if lastCheck.Valid {
-		ws.LastCheckAt, _ = time.Parse(time.DateTime, lastCheck.String)
+		ws.LastCheckAt = parseSQLiteTime(lastCheck.String)
 	}
 	if lastSuccess.Valid {
-		ws.LastSuccessAt, _ = time.Parse(time.DateTime, lastSuccess.String)
+		ws.LastSuccessAt = parseSQLiteTime(lastSuccess.String)
 	}
 	if nextRun.Valid {
-		ws.NextRunAt, _ = time.Parse(time.DateTime, nextRun.String)
+		ws.NextRunAt = parseSQLiteTime(nextRun.String)
 	}
 	return ws, nil
+}
+
+// parseSQLiteTime accepts both ISO-8601 (RFC3339, "2026-04-18T15:37:21Z")
+// and SQLite-CLI-style DateTime ("2026-04-18 15:37:21") strings. The
+// modernc driver normalises DATETIME columns to RFC3339 when Scan'd into
+// a string, but older rows and hand-crafted INSERTs use the space form.
+// Returns zero time on any failure.
+func parseSQLiteTime(s string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, time.DateTime} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func (db *DB) UpdateWANInterfaceState(ws *WANInterfaceState) error {
@@ -713,6 +728,7 @@ func (db *DB) ClearRetryFlag(runID int64) error {
 }
 
 // PruneActionRuns deletes old action run entries beyond the retention limit.
+// Kept for backward compatibility; new code should use PruneHistoryByTTL.
 func (db *DB) PruneActionRuns(maxRows int) error {
 	_, err := db.conn.Exec(
 		`DELETE FROM action_runs WHERE id NOT IN (
@@ -720,6 +736,134 @@ func (db *DB) PruneActionRuns(maxRows int) error {
 		)`, maxRows,
 	)
 	return err
+}
+
+// HistoryRetention is the per-outcome TTL configuration for the History
+// auto-recycler (#29). Zero / negative means "keep forever". Each value is
+// in seconds.
+type HistoryRetention struct {
+	CheckOKSeconds       int // unchanged checks — noisy, short TTL
+	CheckChangedSeconds  int // IP changed — diagnostic, usually lifetime
+	CheckFailedSeconds   int // probe/PBR failure — medium retention
+	ActionSuccessSeconds int // successful action run
+	ActionFailedSeconds  int // failed action run — usually lifetime
+}
+
+// DefaultHistoryRetention returns the conservative defaults: short TTL for
+// the noisy unchanged-check bucket, lifetime for the diagnostic buckets.
+func DefaultHistoryRetention() HistoryRetention {
+	return HistoryRetention{
+		CheckOKSeconds:       3600,     // 1 hour — unchanged-check noise
+		CheckChangedSeconds:  0,        // lifetime — IP-change timeline is the audit trail
+		CheckFailedSeconds:   30 * 86400, // 30 days
+		ActionSuccessSeconds: 30 * 86400, // 30 days
+		ActionFailedSeconds:  0,        // lifetime — failures must be investigable
+	}
+}
+
+var historyRetentionKeys = []struct {
+	Key string
+	Get func(*HistoryRetention) *int
+}{
+	{"history.check.ok_ttl_seconds", func(r *HistoryRetention) *int { return &r.CheckOKSeconds }},
+	{"history.check.changed_ttl_seconds", func(r *HistoryRetention) *int { return &r.CheckChangedSeconds }},
+	{"history.check.failed_ttl_seconds", func(r *HistoryRetention) *int { return &r.CheckFailedSeconds }},
+	{"history.action.success_ttl_seconds", func(r *HistoryRetention) *int { return &r.ActionSuccessSeconds }},
+	{"history.action.failed_ttl_seconds", func(r *HistoryRetention) *int { return &r.ActionFailedSeconds }},
+}
+
+// LoadHistoryRetention reads the five retention settings, falling back to
+// the defaults for any key that is missing / blank / unparseable.
+func (db *DB) LoadHistoryRetention() HistoryRetention {
+	r := DefaultHistoryRetention()
+	for _, entry := range historyRetentionKeys {
+		v, err := db.GetSetting(entry.Key)
+		if err != nil || v == "" {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			continue
+		}
+		*entry.Get(&r) = n
+	}
+	return r
+}
+
+// SaveHistoryRetention writes the five retention settings. Values ≤ 0 are
+// stored as "0" (lifetime).
+func (db *DB) SaveHistoryRetention(r HistoryRetention) error {
+	for _, entry := range historyRetentionKeys {
+		v := *entry.Get(&r)
+		if v < 0 {
+			v = 0
+		}
+		if err := db.SetSetting(entry.Key, fmt.Sprintf("%d", v)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HistorySweepStats records how many rows each bucket pruned in a single
+// sweep. Used for the log line so operators can see retention at work.
+type HistorySweepStats struct {
+	CheckOK       int64
+	CheckChanged  int64
+	CheckFailed   int64
+	ActionSuccess int64
+	ActionFailed  int64
+}
+
+// PruneHistoryByTTL deletes rows older than the per-outcome TTL. Each
+// bucket with TTL <= 0 is skipped (kept forever). Returns per-bucket
+// delete counts.
+func (db *DB) PruneHistoryByTTL(r HistoryRetention) (HistorySweepStats, error) {
+	var stats HistorySweepStats
+	prune := func(query string, secs int) (int64, error) {
+		if secs <= 0 {
+			return 0, nil
+		}
+		cutoff := time.Now().Add(-time.Duration(secs) * time.Second).UTC()
+		res, err := db.conn.Exec(query, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		return n, nil
+	}
+
+	n, err := prune(`DELETE FROM wan_interface_checks WHERE status = 'ok' AND executed_at < ?`, r.CheckOKSeconds)
+	if err != nil {
+		return stats, fmt.Errorf("prune check.ok: %w", err)
+	}
+	stats.CheckOK = n
+
+	n, err = prune(`DELETE FROM wan_interface_checks WHERE status = 'changed' AND executed_at < ?`, r.CheckChangedSeconds)
+	if err != nil {
+		return stats, fmt.Errorf("prune check.changed: %w", err)
+	}
+	stats.CheckChanged = n
+
+	n, err = prune(`DELETE FROM wan_interface_checks WHERE status = 'failed' AND executed_at < ?`, r.CheckFailedSeconds)
+	if err != nil {
+		return stats, fmt.Errorf("prune check.failed: %w", err)
+	}
+	stats.CheckFailed = n
+
+	n, err = prune(`DELETE FROM action_runs WHERE status = 'success' AND executed_at < ?`, r.ActionSuccessSeconds)
+	if err != nil {
+		return stats, fmt.Errorf("prune action.success: %w", err)
+	}
+	stats.ActionSuccess = n
+
+	n, err = prune(`DELETE FROM action_runs WHERE status = 'failed' AND executed_at < ?`, r.ActionFailedSeconds)
+	if err != nil {
+		return stats, fmt.Errorf("prune action.failed: %w", err)
+	}
+	stats.ActionFailed = n
+
+	return stats, nil
 }
 
 // --- UI Queries (joined, filtered, paginated) ---

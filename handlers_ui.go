@@ -196,6 +196,9 @@ type WANInterfaceDisplay struct {
 	StatusBadgeClass string
 	LastCheck        string
 	LastError        string // surfaced on failed cards
+	IPAdvisory       string // CGNAT / private / loopback warning (#13)
+	Stale            bool   // true when last success older than StaleAfterSeconds (#15)
+	StaleAge         string // human-readable age for the badge tooltip
 	ActionCount      int
 }
 
@@ -226,7 +229,44 @@ func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
 	}
 	count, _ := s.app.db.GetWANInterfaceLinkedActionCount(wi.ID)
 	wd.ActionCount = count
+	wd.IPAdvisory = IPAdvisory(wd.IP)
+
+	// Staleness (#15): flagged when the WAN is enabled, the user has opted
+	// in by setting stale_after_seconds > 0, and the last successful check
+	// is older than that threshold. Disabled WANs are never flagged.
+	if wi.Enabled && wi.Config.StaleAfterSeconds > 0 {
+		ref := time.Time{}
+		if state, err := s.app.db.GetWANInterfaceState(wi.ID); err == nil && state != nil {
+			if !state.LastSuccessAt.IsZero() {
+				ref = state.LastSuccessAt
+			} else if !state.LastCheckAt.IsZero() {
+				ref = state.LastCheckAt
+			}
+		}
+		if !ref.IsZero() {
+			age := time.Since(ref)
+			if age > time.Duration(wi.Config.StaleAfterSeconds)*time.Second {
+				wd.Stale = true
+				wd.StaleAge = formatDuration(age)
+			}
+		}
+	}
 	return wd
+}
+
+// formatDuration renders durations at coarse granularity for UI badges:
+// "5m", "3h", "2d". Avoids the stdlib's noisy "5m12.345s" form.
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	default:
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	}
 }
 
 // --- Page Handlers ---
@@ -254,15 +294,16 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 
 	data := struct {
 		PageData
-		WANInterface   *WANInterface
-		IsEdit         bool
-		AllActions     []Action
-		LinkedIDs      map[int64]bool
-		LinkedTriggers map[int64]string // action ID -> trigger_on
-		EgressFields   template.HTML    // pre-rendered egress fields
-		ScheduleValue  int              // for simple-mode dropdown
-		ScheduleUnit   string           // minutes/hours/days
-		CustomSchedule bool             // true if cron isn't a simple pattern
+		WANInterface      *WANInterface
+		IsEdit            bool
+		AllActions        []Action
+		LinkedIDs         map[int64]bool
+		LinkedTriggers    map[int64]string // action ID -> trigger_on
+		EgressFields      template.HTML    // pre-rendered egress fields
+		ScheduleValue     int              // for simple-mode dropdown
+		ScheduleUnit      string           // minutes/hours/days
+		CustomSchedule    bool             // true if cron isn't a simple pattern
+		StaleAfterMinutes int              // #15
 	}{
 		PageData:       PageData{Active: "wan-interfaces", CSRFToken: getCSRFToken(r)},
 		IsEdit:         isEdit,
@@ -298,6 +339,7 @@ func (s *Server) handleWANInterfaceForm(w http.ResponseWriter, r *http.Request) 
 	} else {
 		data.CustomSchedule = true
 	}
+	data.StaleAfterMinutes = data.WANInterface.Config.StaleAfterSeconds / 60
 
 	actions, _ := s.app.db.ListActions()
 	data.AllActions = actions
@@ -541,6 +583,8 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		tz = "Local"
 	}
 
+	retention := s.app.db.LoadHistoryRetention()
+
 	data := struct {
 		PageData
 		DailySummaryTime string
@@ -549,6 +593,7 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		KeyPath          string
 		Version          string
 		Commit           string
+		RetentionRows    []retentionRowView
 	}{
 		PageData:         PageData{Title: "Settings", Active: "settings", CSRFToken: getCSRFToken(r)},
 		DailySummaryTime: summaryTime,
@@ -557,8 +602,74 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		KeyPath:          filepath.Join(s.app.boot.DataDir, "encryption.key"),
 		Version:          Version,
 		Commit:           Commit,
+		RetentionRows:    buildRetentionRows(retention),
 	}
 	s.templates.renderPage(w, "settings", data)
+}
+
+// retentionRowView is one row in the Settings > History Retention table,
+// with the seconds value broken into a (number, unit) pair for the UI.
+type retentionRowView struct {
+	Key   string // form field prefix (retention_check_ok, etc.)
+	Label string
+	Help  string
+	Value int    // display value in chosen unit
+	Unit  string // "minutes" | "hours" | "days" | "never"
+}
+
+// buildRetentionRows converts the seconds-based retention config into
+// (number, unit) form-friendly rows. "never" wins when seconds is 0.
+// Otherwise the largest round unit is chosen.
+func buildRetentionRows(r HistoryRetention) []retentionRowView {
+	type spec struct {
+		key, label, help string
+		secs             int
+	}
+	specs := []spec{
+		{"retention_check_ok", "Check: unchanged (ok)", "IP check confirmed the same IP — high volume, low signal after the next tick.", r.CheckOKSeconds},
+		{"retention_check_changed", "Check: IP changed", "Records a new observed IP — keep long-term as the audit trail.", r.CheckChangedSeconds},
+		{"retention_check_failed", "Check: failed", "Probe or PBR setup failed — keep long enough to investigate.", r.CheckFailedSeconds},
+		{"retention_action_success", "Action: success", "Linked action executed successfully.", r.ActionSuccessSeconds},
+		{"retention_action_failed", "Action: failed", "Linked action errored — retry state depends on these rows.", r.ActionFailedSeconds},
+	}
+	rows := make([]retentionRowView, 0, len(specs))
+	for _, s := range specs {
+		v, u := secondsToDisplayUnit(s.secs)
+		rows = append(rows, retentionRowView{
+			Key: s.key, Label: s.label, Help: s.help, Value: v, Unit: u,
+		})
+	}
+	return rows
+}
+
+// secondsToDisplayUnit picks the largest round unit. 0 → ("0", "never").
+func secondsToDisplayUnit(secs int) (int, string) {
+	if secs <= 0 {
+		return 0, "never"
+	}
+	if secs%86400 == 0 {
+		return secs / 86400, "days"
+	}
+	if secs%3600 == 0 {
+		return secs / 3600, "hours"
+	}
+	return (secs + 59) / 60, "minutes"
+}
+
+// displayUnitToSeconds is the inverse used by the save handler.
+func displayUnitToSeconds(v int, unit string) int {
+	if unit == "never" || v <= 0 {
+		return 0
+	}
+	switch unit {
+	case "days":
+		return v * 86400
+	case "hours":
+		return v * 3600
+	case "minutes":
+		return v * 60
+	}
+	return 0
 }
 
 // --- HTMX Partial Handlers ---
@@ -1026,10 +1137,11 @@ func (s *Server) handleUICreateWANInterface(w http.ResponseWriter, r *http.Reque
 		Schedule: schedule,
 		Timezone: "Local",
 		Config: WANInterfaceConfig{
-			ProbeURLs:   parseLines(r.FormValue("probe_urls")),
-			Strategy:    r.FormValue("strategy"),
-			TimeoutSecs: parseInt(r.FormValue("timeout"), 10),
-			Egress:      parseEgressForm(r),
+			ProbeURLs:         parseLines(r.FormValue("probe_urls")),
+			Strategy:          r.FormValue("strategy"),
+			TimeoutSecs:       parseInt(r.FormValue("timeout"), 10),
+			Egress:            parseEgressForm(r),
+			StaleAfterSeconds: parseInt(r.FormValue("stale_after_minutes"), 0) * 60,
 		},
 	}
 	if wi.Name == "" {
@@ -1290,6 +1402,28 @@ func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "failed to save setting", http.StatusInternalServerError)
 			return
 		}
+	}
+
+	// History retention (#29). Parse five (number, unit) pairs into seconds
+	// and persist. Missing fields keep the previously stored value, which
+	// LoadHistoryRetention resolves to defaults when absent.
+	retention := s.app.db.LoadHistoryRetention()
+	apply := func(key string, target *int) {
+		unit := r.FormValue(key + "_unit")
+		if unit == "" {
+			return
+		}
+		n, _ := strconv.Atoi(r.FormValue(key + "_value"))
+		*target = displayUnitToSeconds(n, unit)
+	}
+	apply("retention_check_ok", &retention.CheckOKSeconds)
+	apply("retention_check_changed", &retention.CheckChangedSeconds)
+	apply("retention_check_failed", &retention.CheckFailedSeconds)
+	apply("retention_action_success", &retention.ActionSuccessSeconds)
+	apply("retention_action_failed", &retention.ActionFailedSeconds)
+	if err := s.app.db.SaveHistoryRetention(retention); err != nil {
+		http.Error(w, "failed to save retention: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// HX-Redirect to reload the full settings page cleanly

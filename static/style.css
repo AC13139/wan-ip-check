@@ -746,6 +746,15 @@ tbody tr:hover {
   border-radius: 0 var(--radius) var(--radius) 0;
   word-break: break-word;
 }
+.wi-advisory-row {
+  margin-top: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--warning-bg);
+  border-left: 2px solid var(--warning);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  word-break: break-word;
+}
+.text-warning { color: var(--warning); }
 
 /* ========== Cloudflare DNS custom form ========== */
 .cf-zone-row {
@@ -802,6 +811,43 @@ tbody tr:hover {
   border-radius: 0 var(--radius) var(--radius) 0;
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* ========== Settings: History Retention ========== */
+.retention-table {
+  width: 100%;
+  margin-top: var(--space-md);
+  border-collapse: collapse;
+}
+.retention-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border);
+}
+.retention-table td {
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+.retention-label {
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+.retention-inputs {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+  min-width: 220px;
+}
+.retention-inputs input[type="number"] {
+  width: 90px;
+}
+.retention-inputs .form-select {
+  flex: 1;
 }
 
 /* ========== Settings: About card ========== */
