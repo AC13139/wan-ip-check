@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -72,12 +73,13 @@ func loadTemplates() (*Templates, error) {
 
 	// Partials — read and parse individually
 	partialFiles := map[string]string{
-		"history-rows":         "templates/history.html",
-		"config-fields":        "templates/partials/config_fields.html",
-		"wan-interface-card":   "templates/partials/wan_interface_card.html",
-		"egress-fields":        "templates/partials/egress_fields.html",
-		"network-diagnostics":  "templates/partials/network_diagnostics.html",
-		"test-route-result":    "templates/partials/test_route_result.html",
+		"history-rows":           "templates/history.html",
+		"config-fields":          "templates/partials/config_fields.html",
+		"wan-interface-card":     "templates/partials/wan_interface_card.html",
+		"egress-fields":          "templates/partials/egress_fields.html",
+		"network-diagnostics":    "templates/partials/network_diagnostics.html",
+		"test-route-result":      "templates/partials/test_route_result.html",
+		"cloudflare-dns-fields":  "templates/partials/cloudflare_dns_fields.html",
 	}
 	for name, path := range partialFiles {
 		content, err := fs.ReadFile(templateFS, path)
@@ -378,14 +380,15 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		PageData
-		Action        *Action
-		IsEdit        bool
-		ActionType    string
-		Schema        []ConfigField
-		ConfigValues    map[string]interface{}
-		AllTypes        []ActionTypeInfo
-		TypeDisplayName string
-		SchemaPanels    template.HTML // pre-rendered panels for all types (new form only)
+		Action           *Action
+		IsEdit           bool
+		ActionType       string
+		Schema           []ConfigField
+		ConfigValues     map[string]interface{}
+		AllTypes         []ActionTypeInfo
+		TypeDisplayName  string
+		SchemaPanels     template.HTML // pre-rendered panels for all types (new form only)
+		CustomFormHTML   template.HTML // pre-rendered custom form (edit path for CF DNS)
 	}{
 		PageData:     PageData{Active: "actions", CSRFToken: getCSRFToken(r)},
 		IsEdit:       isEdit,
@@ -410,6 +413,9 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 
 		if executor, err := s.app.registry.Get(action.Type); err == nil {
 			data.Schema = executor.ConfigSchema()
+			if html := s.renderCustomActionForm(executor, data.ConfigValues); html != "" {
+				data.CustomFormHTML = template.HTML(html)
+			}
 		}
 	} else {
 		data.Title = "Add Action"
@@ -425,10 +431,7 @@ func (s *Server) handleActionForm(w http.ResponseWriter, r *http.Request) {
 // form's type dropdown can toggle them via a local script. Eliminates the
 // HTMX round-trip to /ui/action-schema (which 522s behind reverse proxies).
 func (s *Server) renderAllActionSchemas(selected string) template.HTML {
-	tmpl, ok := s.templates.partials["config-fields"]
-	if !ok {
-		return template.HTML("")
-	}
+	genericTmpl := s.templates.partials["config-fields"]
 	var buf strings.Builder
 	placeholderStyle := "display:none"
 	if selected == "" {
@@ -446,11 +449,46 @@ func (s *Server) renderAllActionSchemas(selected string) template.HTML {
 			style = ""
 		}
 		var sub strings.Builder
-		_ = tmpl.Execute(&sub, executor.ConfigSchema())
+		if rendered := s.renderCustomActionForm(executor, nil); rendered != "" {
+			sub.WriteString(rendered)
+		} else if genericTmpl != nil {
+			_ = genericTmpl.Execute(&sub, executor.ConfigSchema())
+		}
 		fmt.Fprintf(&buf, `<div data-action-type=%q style=%q>%s</div>`,
 			t, style, sub.String())
 	}
 	return template.HTML(buf.String())
+}
+
+// renderCustomActionForm renders the executor's custom partial (if any)
+// against the provided values. Returns "" when the executor does not
+// declare a custom template. Executors may optionally implement
+// PrepareFormView to transform raw config into template-ready values.
+func (s *Server) renderCustomActionForm(executor ActionExecutor, values map[string]interface{}) string {
+	type customTmpl interface{ CustomFormTemplate() string }
+	c, ok := executor.(customTmpl)
+	if !ok {
+		return ""
+	}
+	name := c.CustomFormTemplate()
+	if name == "" {
+		return ""
+	}
+	tmpl := s.templates.partials[name]
+	if tmpl == nil {
+		return ""
+	}
+	if values == nil {
+		values = map[string]interface{}{}
+	}
+	if prep, ok := executor.(interface {
+		PrepareFormView(map[string]interface{}) map[string]interface{}
+	}); ok {
+		values = prep.PrepareFormView(values)
+	}
+	var sub strings.Builder
+	_ = tmpl.Execute(&sub, values)
+	return sub.String()
 }
 
 func (s *Server) handleHistoryPage(w http.ResponseWriter, r *http.Request) {
@@ -667,7 +705,11 @@ func (s *Server) handleUITestAction(w http.ResponseWriter, r *http.Request) {
 	// Build config JSON from form fields (mask-merge secrets against existing
 	// record if an action_id is provided so users editing existing actions
 	// can test without re-entering secrets).
-	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		fmt.Fprintf(w, `<span class="badge badge-error">invalid form: %s</span>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
 	if existingIDStr := r.FormValue("action_id"); existingIDStr != "" {
 		if existingID, err := strconv.ParseInt(existingIDStr, 10, 64); err == nil {
 			if existing, err := s.app.db.GetAction(existingID); err == nil {
@@ -845,6 +887,60 @@ func (s *Server) handleUIEgressFields(w http.ResponseWriter, r *http.Request) {
 	s.templates.renderPartial(w, "egress-fields", data)
 }
 
+// handleUICloudflareZones fetches the zones reachable by a given API token
+// and returns an HTML fragment of <option> tags ready to swap into the
+// Cloudflare DNS form's zone select. Accepts either a fresh api_token or,
+// for the edit path, an action_id whose stored token is decrypted for reuse
+// (so users editing an existing action need not re-enter the secret).
+func (s *Server) handleUICloudflareZones(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "invalid form", http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("api_token"))
+	if token == "" || token == secretMask {
+		if idStr := r.FormValue("action_id"); idStr != "" {
+			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+				if action, err := s.app.db.GetAction(id); err == nil {
+					if dec, err := DecryptActionSecrets(action.ConfigJSON, []string{"api_token"}, s.app.encKey); err == nil {
+						var cfg struct {
+							APIToken string `json:"api_token"`
+						}
+						json.Unmarshal(dec, &cfg)
+						token = cfg.APIToken
+					}
+				}
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if token == "" {
+		fmt.Fprint(w, `<option value="">Enter API Token first</option>`)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	zones, err := ListCloudflareZones(ctx, s.dispatcher.directClient, token)
+	if err != nil {
+		fmt.Fprintf(w, `<option value="">Error: %s</option>`, template.HTMLEscapeString(err.Error()))
+		return
+	}
+	if len(zones) == 0 {
+		fmt.Fprint(w, `<option value="">No zones found for this token</option>`)
+		return
+	}
+	fmt.Fprint(w, `<option value="">Select a zone…</option>`)
+	selectedZone := r.FormValue("zone_id")
+	for _, z := range zones {
+		sel := ""
+		if z.ID == selectedZone {
+			sel = " selected"
+		}
+		fmt.Fprintf(w, `<option value=%q data-zone-name=%q%s>%s</option>`,
+			z.ID, z.Name, sel, template.HTMLEscapeString(z.Name))
+	}
+}
+
 func (s *Server) handleUIActionSchema(w http.ResponseWriter, r *http.Request) {
 	actionType := r.URL.Query().Get("type")
 	if actionType == "" {
@@ -982,7 +1078,11 @@ func (s *Server) handleUICreateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	if err := executor.ValidateConfig(configJSON); err != nil {
 		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
@@ -1024,7 +1124,11 @@ func (s *Server) handleUIUpdateAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configJSON := buildConfigFromForm(r, executor.ConfigSchema())
+	configJSON, err := buildActionConfig(r, executor)
+	if err != nil {
+		http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	// Merge masked secrets with existing encrypted values
 	merged := mergeSecretFields(configJSON, existing.ConfigJSON, executor.SecretFields())
 
@@ -1080,6 +1184,19 @@ func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) 
 }
 
 // --- Helpers ---
+
+// buildActionConfig picks the right form-to-JSON strategy for an executor.
+// Executors that implement the optional formParser interface (e.g.
+// Cloudflare DNS with its repeater) get their custom parsing; everyone
+// else falls back to the generic schema-driven reader.
+func buildActionConfig(r *http.Request, executor ActionExecutor) (json.RawMessage, error) {
+	if cp, ok := executor.(interface {
+		ParseForm(url.Values) (json.RawMessage, error)
+	}); ok {
+		return cp.ParseForm(r.PostForm)
+	}
+	return buildConfigFromForm(r, executor.ConfigSchema()), nil
+}
 
 func buildConfigFromForm(r *http.Request, schema []ConfigField) json.RawMessage {
 	config := make(map[string]interface{})

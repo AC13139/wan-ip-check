@@ -747,6 +747,63 @@ tbody tr:hover {
   word-break: break-word;
 }
 
+/* ========== Cloudflare DNS custom form ========== */
+.cf-zone-row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+.cf-zone-row .form-select {
+  flex: 1;
+}
+.cf-records-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+.cf-record-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-sm);
+  align-items: center;
+}
+.cf-proxied-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.cf-proxied-toggle input[type="checkbox"] {
+  accent-color: var(--warning);
+}
+.cf-proxied-toggle:has(input:checked) {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.cf-proxied-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.record-remove {
+  min-width: 32px;
+  padding: 4px 10px;
+  font-weight: 600;
+}
+.cf-legacy-banner {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--warning-bg);
+  border-left: 2px solid var(--warning);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 /* ========== Action edit: Test button + inline result ========== */
 .test-action-wrap {
   display: flex;

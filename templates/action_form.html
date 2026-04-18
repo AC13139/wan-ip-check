@@ -45,6 +45,9 @@
     <h3 class="section-title">Configuration</h3>
     <div id="config-fields">
       {{if .IsEdit}}
+      {{if .CustomFormHTML}}
+      {{.CustomFormHTML}}
+      {{else}}
       {{range .Schema}}
       <div class="form-group">
         <label class="form-label">{{.Label}}{{if .Required}} *{{end}}</label>
@@ -78,6 +81,7 @@
         {{end}}
         {{if .HelpText}}<div class="form-help">{{.HelpText}}</div>{{end}}
       </div>
+      {{end}}
       {{end}}
       {{else}}
       {{.SchemaPanels}}
