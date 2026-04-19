@@ -13,6 +13,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	// Embed the IANA timezone database in the binary so time.LoadLocation
+	// works on minimal Alpine / scratch images that do not ship tzdata.
+	// Adds ~450KB to the binary but means every zone the Settings dropdown
+	// exposes (Asia/Shanghai, America/New_York, …) resolves everywhere.
+	_ "time/tzdata"
 )
 
 // Version and Commit are injected at build time via -ldflags:

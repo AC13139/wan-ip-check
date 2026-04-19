@@ -1388,13 +1388,13 @@ func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) 
 	summaryTime := r.FormValue("daily_summary_time")
 	tz := r.FormValue("timezone")
 
+	// Validate everything before writing anything — an invalid field
+	// should reject the whole form, not leave earlier fields saved while
+	// later ones fail (this used to mask #29's "retention doesn't save"
+	// report: timezone validation 400'd after summaryTime had persisted).
 	if summaryTime != "" {
 		if !dailySummaryTimeRe.MatchString(summaryTime) || len(summaryTime) != 4 || summaryTime[:2] > "23" || summaryTime[2:] > "59" {
 			http.Error(w, "invalid HHMM format", http.StatusBadRequest)
-			return
-		}
-		if err := s.app.db.SetSetting("daily_summary_time", summaryTime); err != nil {
-			http.Error(w, "failed to save setting", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -1403,6 +1403,15 @@ func (s *Server) handleUIUpdateSettings(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	}
+
+	if summaryTime != "" {
+		if err := s.app.db.SetSetting("daily_summary_time", summaryTime); err != nil {
+			http.Error(w, "failed to save setting", http.StatusInternalServerError)
+			return
+		}
+	}
+	if tz != "" {
 		if err := s.app.db.SetSetting("timezone", tz); err != nil {
 			http.Error(w, "failed to save setting", http.StatusInternalServerError)
 			return
