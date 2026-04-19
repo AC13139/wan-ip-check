@@ -140,7 +140,11 @@ func generateCSRFToken() string {
 
 func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Generate token for GET requests (stored in cookie)
+		// Generate token for GET requests (stored in cookie). The token is
+		// also attached to the REQUEST so getCSRFToken(r) inside the page
+		// handler sees the freshly-generated value — otherwise the very
+		// first visit renders the form with an empty token, and the first
+		// submit 403s because cookie ≠ empty form value.
 		if r.Method == http.MethodGet {
 			cookie, err := r.Cookie("csrf_token")
 			if err != nil || cookie.Value == "" {
@@ -152,6 +156,7 @@ func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
 					HttpOnly: true,
 					SameSite: http.SameSiteStrictMode,
 				})
+				r.AddCookie(&http.Cookie{Name: "csrf_token", Value: token})
 			}
 			next.ServeHTTP(w, r)
 			return
