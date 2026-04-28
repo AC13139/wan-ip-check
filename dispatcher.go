@@ -126,37 +126,52 @@ func (m *PBRManager) CleanupAll() {
 
 // Dispatcher manages WAN interface check scheduling and action execution.
 type Dispatcher struct {
-	db               *DB
-	registry         *ActionRegistry
-	encKey           []byte
-	directClient     *http.Client
-	proxyClient      *http.Client
-	logger           *slog.Logger
-	cron             *cron.Cron
-	entryMap         map[int64]cron.EntryID
+	db                *DB
+	registry          *ActionRegistry
+	encKey            []byte
+	directClient      *http.Client
+	proxyClient       *http.Client
+	logger            *slog.Logger
+	cron              *cron.Cron
+	entryMap          map[int64]cron.EntryID
 	wanInterfaceLocks map[int64]*sync.Mutex
-	locksMu          sync.Mutex
-	cronMu           sync.Mutex // protects cron lifecycle (Start/Stop/Reload)
-	pbrManager       *PBRManager
+	locksMu           sync.Mutex
+	cronMu            sync.Mutex // protects cron lifecycle (Start/Stop/Reload)
+	pbrManager        *PBRManager
+
+	// parentCtx is the long-lived (signal-scoped) context set by Start().
+	// Scheduled cron jobs MUST use this — never the request-scoped context
+	// passed into Reload(), which is canceled when the HTTP handler returns
+	// and would silently cancel every subsequent scheduled probe.
+	parentCtx context.Context
 }
 
 // NewDispatcher creates a new dispatcher.
 func NewDispatcher(app *App) *Dispatcher {
 	return &Dispatcher{
-		db:               app.db,
-		registry:         app.registry,
-		encKey:           app.encKey,
-		directClient:     app.directClient,
-		proxyClient:      app.proxyClient,
-		logger:           app.logger,
-		entryMap:         make(map[int64]cron.EntryID),
+		db:                app.db,
+		registry:          app.registry,
+		encKey:            app.encKey,
+		directClient:      app.directClient,
+		proxyClient:       app.proxyClient,
+		logger:            app.logger,
+		entryMap:          make(map[int64]cron.EntryID),
 		wanInterfaceLocks: make(map[int64]*sync.Mutex),
-		pbrManager:       NewPBRManager(app.logger),
+		pbrManager:        NewPBRManager(app.logger),
+		// Safety net: a Reload that somehow runs before Start would otherwise
+		// pass nil into the cron job closure and panic on the next tick.
+		parentCtx: context.Background(),
 	}
 }
 
 // Start loads all enabled WAN interfaces, runs them once, and starts the cron scheduler.
 func (d *Dispatcher) Start(ctx context.Context) error {
+	// Acquire cronMu so the write to parentCtx happens-before any concurrent
+	// Reload reader. Pairs with the Reload lock at the read site.
+	d.cronMu.Lock()
+	d.parentCtx = ctx
+	d.cronMu.Unlock()
+
 	wanInterfaces, err := d.db.ListWANInterfaces()
 	if err != nil {
 		return err
@@ -169,11 +184,11 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 
 	for _, wi := range wanInterfaces {
 		if wi.Enabled {
-			d.checkWANInterface(ctx, wi.ID, "scheduled")
+			d.checkWANInterface(d.parentCtx, wi.ID, "scheduled")
 		}
 	}
 
-	return d.startCron(ctx)
+	return d.startCron(d.parentCtx)
 }
 
 // cleanupLegacySourceRules deletes any `ip rule from SOURCE lookup TBL`
@@ -224,7 +239,12 @@ func (d *Dispatcher) Stop() {
 
 // Reload stops the current cron, re-reads WAN interfaces from DB, and reschedules.
 // Called by API handlers after WAN interface create/update/delete.
-func (d *Dispatcher) Reload(ctx context.Context) error {
+//
+// The caller's context is intentionally ignored: it is request-scoped and gets
+// canceled the moment the HTTP handler returns. Scheduled cron jobs must run
+// under d.parentCtx (set by Start) so they survive past the handler that
+// triggered the reload.
+func (d *Dispatcher) Reload(_ context.Context) error {
 	d.cronMu.Lock()
 	defer d.cronMu.Unlock()
 
@@ -237,7 +257,7 @@ func (d *Dispatcher) Reload(ctx context.Context) error {
 		<-d.cron.Stop().Done()
 	}
 	d.entryMap = make(map[int64]cron.EntryID)
-	return d.startCron(ctx)
+	return d.startCron(d.parentCtx)
 }
 
 func (d *Dispatcher) startCron(ctx context.Context) error {
