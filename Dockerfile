@@ -3,7 +3,12 @@
 # =============================================================================
 
 # Stage 1: Build the Go binary (templates + static embedded via embed.FS)
-FROM golang:1.25-alpine AS builder
+# --platform=$BUILDPLATFORM pins the builder to the host arch so cross-arch
+# images skip QEMU emulation. TARGETOS / TARGETARCH are populated by buildx
+# and drive Go's native cross-compilation in the build step below.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 WORKDIR /build
@@ -12,7 +17,7 @@ RUN go mod download
 COPY *.go ./
 COPY templates/ templates/
 COPY static/ static/
-RUN CGO_ENABLED=0 go build \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
     -o wan-ip-check .
 
