@@ -87,6 +87,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/actions/{id}", s.handleUpdateAction)
 	mux.HandleFunc("DELETE /api/actions/{id}", s.handleDeleteAction)
 	mux.HandleFunc("POST /api/actions/{id}/test", s.handleTestAction)
+	mux.HandleFunc("GET /api/actions/{id}/diagnose-cfdns", s.handleDiagnoseCFDNS)
 	mux.HandleFunc("GET /api/action-types", s.handleListActionTypes)
 	mux.HandleFunc("GET /api/wan-interfaces/{id}/actions", s.handleGetWANInterfaceActions)
 	mux.HandleFunc("PUT /api/wan-interfaces/{id}/actions", s.handleSetWANInterfaceActions)

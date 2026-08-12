@@ -146,6 +146,91 @@ func (e *CFDNSExecutor) ValidateConfig(raw json.RawMessage) error {
 	return nil
 }
 
+// CFDNSDiagnose describes what Execute would do given the supplied config
+// — which records Cloudflare currently has, which ones the configured
+// records would match (after canonicalize + normalize), and which would
+// be flagged as "will create". Read-only; useful for debugging
+// add-vs-update mismatches without running the real action (#36).
+func (e *CFDNSExecutor) CFDNSDiagnose(ctx context.Context, raw json.RawMessage) (map[string]interface{}, error) {
+	var cfg cfDNSConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if cfg.APIToken == "" || cfg.ZoneID == "" {
+		return nil, fmt.Errorf("api_token and zone_id are required")
+	}
+	out := map[string]interface{}{
+		"zone_id": cfg.ZoneID,
+		"zone_name_configured": cfg.ZoneName,
+	}
+	if cfg.ZoneName == "" {
+		name, err := fetchZoneName(ctx, e.client, cfg.APIToken, cfg.ZoneID)
+		if err != nil {
+			out["zone_name_error"] = err.Error()
+		} else {
+			cfg.ZoneName = name
+			out["zone_name_fetched"] = name
+		}
+	}
+
+	existing, err := e.listARecords(ctx, cfg.APIToken, cfg.ZoneID)
+	if err != nil {
+		out["list_error"] = err.Error()
+		return out, nil
+	}
+
+	// Surface both raw and normalized keys so a name-format mismatch
+	// (case, trailing dot, etc.) is obvious from the response.
+	rawNames := make([]string, 0, len(existing))
+	normNames := make([]string, 0, len(existing))
+	for _, r := range existing {
+		rawNames = append(rawNames, r.Name)
+		normNames = append(normNames, normalizeCFName(r.Name))
+	}
+	out["existing_records_raw"] = rawNames
+	out["existing_records_normalized"] = normNames
+	out["existing_record_count"] = len(existing)
+
+	type configured struct {
+		Input         string
+		Canonicalized string
+		NormalizedKey string
+		MatchedRecord string `json:"matched_record,omitempty"`
+		Action        string // "update", "create", or "skip (empty)"
+	}
+	configuredOut := []configured{}
+	for _, rec := range cfg.Records {
+		full := canonicalizeRecordName(rec.Name, cfg.ZoneName)
+		entry := configured{Input: rec.Name, Canonicalized: full}
+		if full == "" {
+			entry.Action = "skip (empty)"
+		} else {
+			entry.NormalizedKey = normalizeCFName(full)
+			if r, ok := mapLookup(existing, normalizeCFName(full)); ok {
+				entry.MatchedRecord = r.Name
+				entry.Action = "update"
+			} else {
+				entry.Action = "create"
+			}
+		}
+		configuredOut = append(configuredOut, entry)
+	}
+	out["configured_records"] = configuredOut
+	return out, nil
+}
+
+// mapLookup finds the existing record whose normalized name matches the
+// given key. Lifted out of Execute's hot path so the diagnose helper and
+// Execute agree on what "match" means (#36).
+func mapLookup(existing []cfRecordSummary, key string) (cfRecordSummary, bool) {
+	for _, r := range existing {
+		if normalizeCFName(r.Name) == key {
+			return r, true
+		}
+	}
+	return cfRecordSummary{}, false
+}
+
 func (e *CFDNSExecutor) Execute(ctx context.Context, event IPEvent, raw json.RawMessage) error {
 	var cfg cfDNSConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -173,10 +258,6 @@ func (e *CFDNSExecutor) Execute(ctx context.Context, event IPEvent, raw json.Raw
 	if err != nil {
 		return fmt.Errorf("listing zone records: %w", err)
 	}
-	byName := make(map[string]cfRecordSummary, len(existing))
-	for _, r := range existing {
-		byName[r.Name] = r
-	}
 
 	var (
 		ok     []string
@@ -188,7 +269,9 @@ func (e *CFDNSExecutor) Execute(ctx context.Context, event IPEvent, raw json.Raw
 			failed = append(failed, rec.Name+"=empty name")
 			continue
 		}
-		match, found := byName[full]
+		// Use the same lookup helper as CFDNSDiagnose so production and
+		// the diagnostic endpoint agree on what "match" means (#36).
+		match, found := mapLookup(existing, normalizeCFName(full))
 		var err error
 		if found {
 			err = e.updateRecord(ctx, cfg.APIToken, cfg.ZoneID, match.ID, full, event.NewIP, rec.Proxied)
@@ -415,6 +498,17 @@ func canonicalizeRecordName(name, zone string) string {
 	if zone != "" {
 		return name + "." + zone
 	}
+	return name
+}
+
+// normalizeCFName prepares a DNS name for lookup in the existing-records
+// map. Lowercases (DNS names are case-insensitive) and strips a single
+// trailing dot (some Cloudflare API responses include it; some don't).
+// Returns the input unchanged if neither transform applies (#36).
+func normalizeCFName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ToLower(name)
+	name = strings.TrimSuffix(name, ".")
 	return name
 }
 

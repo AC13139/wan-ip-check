@@ -398,6 +398,64 @@ func (s *Server) handleDeleteAction(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleDiagnoseCFDNS shows what CFDNS Execute would do with the action's
+// current config: lists existing Cloudflare records (raw + normalized),
+// lists the configured records (input / canonicalized / lookup key),
+// and flags each as "update", "create", or "skip". Read-only — never
+// mutates Cloudflare state. Use to debug add-vs-update mismatches (#36).
+func (s *Server) handleDiagnoseCFDNS(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid action ID")
+		return
+	}
+	action, err := s.app.db.GetAction(id)
+	if err == sql.ErrNoRows {
+		writeError(w, http.StatusNotFound, "action not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get action")
+		return
+	}
+	if action.Type != "cloudflare_dns" {
+		writeError(w, http.StatusBadRequest, "diagnose is only supported for cloudflare_dns actions")
+		return
+	}
+	executor, err := s.app.registry.Get(action.Type)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	decrypted, err := DecryptActionSecrets(action.ConfigJSON, executor.SecretFields(), s.app.encKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to decrypt config")
+		return
+	}
+
+	cfExec, ok := executor.(*CFDNSExecutor)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "executor type assertion failed")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	report, err := cfExec.CFDNSDiagnose(ctx, decrypted)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"report":  report,
+	})
+}
+
 func (s *Server) handleTestAction(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
