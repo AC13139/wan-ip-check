@@ -148,7 +148,25 @@ func main() {
 		}
 	}()
 
-	logger.Info("wan-ip-check running", "port", boot.Port)
+	// Start MCP server. If MCP_HTTP_PORT is set, expose over HTTP (bearer
+	// token auth via MCP_AUTH_TOKEN env var). stdio is always wired in
+	// case the process is launched in stdio MCP mode (Claude Code does
+	// this — sets MCP_TRANSPORT=stdio or similar — but the common case
+	// here is HTTP for general agent use, gated by the env var).
+	mcpSrv := NewMCPServer(app)
+	mcpHTTPPort := os.Getenv("MCP_HTTP_PORT")
+	if mcpHTTPPort == "" {
+		mcpHTTPPort = "7374"
+	}
+	if os.Getenv("MCP_DISABLED") != "1" {
+		go func() {
+			if err := mcpSrv.ServeHTTP(ctx, mcpHTTPPort); err != nil {
+				logger.Error("MCP HTTP server failed", "error", err)
+			}
+		}()
+	}
+
+	logger.Info("wan-ip-check running", "port", boot.Port, "mcp_http_port", mcpHTTPPort)
 
 	// Block until signal
 	<-ctx.Done()
