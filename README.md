@@ -45,6 +45,7 @@ Tools like [oznu/cloudflare-ddns](https://github.com/oznu/cloudflare-ddns) updat
 - **Event History** merges check outcomes (ok / changed / failed) with action-run outcomes into a single filterable timeline
 - **Execute** a saved action on demand against the current observed IP; **Test** an in-progress config without saving (read-only probe for Cloudflare DNS, synthetic send for Discord/webhook)
 - **Secrets encrypted at rest** via AES-256-GCM; CSRF-protected UI
+- **MCP server for AI agents** — read-only tools over [Model Context Protocol](https://modelcontextprotocol.io/) (2026-07-28 spec) on a separate port; bearer-token auth; secrets never returned
 
 ## Quick Start
 
@@ -182,6 +183,8 @@ Every check outcome is recorded — even unchanged ok results — and merged wit
 | `DATA_DIR` | `./data` | SQLite + encryption key directory |
 | `DISCORD_PROXY` | — | Global HTTP proxy for Discord actions |
 | `ENCRYPTION_KEY` | auto-generated | 32-byte hex AES key (optional pin) |
+| `MCP_HTTP_PORT` | `7374` | MCP server port; set `MCP_DISABLED=1` to suppress |
+| `MCP_AUTH_TOKEN` | _empty = dev mode_ | Bearer token for the MCP endpoint. Generate with `openssl rand -hex 32` |
 
 ### Upgrade / Migration
 
@@ -200,6 +203,88 @@ curl http://localhost:7373/api/actions                  # secrets masked
 curl http://localhost:7373/api/history?limit=50
 curl http://localhost:7373/api/network/diagnostics     # runtime + caps + recommendation
 ```
+
+## MCP Server for AI Agents
+
+A read-only [Model Context Protocol](https://modelcontextprotocol.io/) server runs alongside the Web UI on a separate port (default `7374`). It implements the [2026-07-28 MCP spec](https://modelcontextprotocol.io/specification/2026-07-28) and exposes wan-ip-check state to any MCP-compatible client (Claude Code, custom agents, IDE plugins) — no hardcoded URLs, no manual JSON parsing.
+
+### What's exposed
+
+| Tool | Returns |
+|---|---|
+| `list_wan_interfaces` | Every WAN with current state, last IP, status, last check, last error |
+| `get_wan_status` | Full WAN detail with state |
+| `list_actions` | All configured actions (Discord / CF DNS / CF Gateway / Webhook) — **secrets masked** |
+| `get_recent_history` | Merged check + action-run timeline for one WAN, paginated |
+| `get_failed_actions` | Action runs queued for retry or abandoned after max retries |
+| `get_settings` | Non-secret settings + retention TTLs |
+
+All six tools declare `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false` so a client UI can safely render a read-only badge and never offer a "modify" button. Tool results include both `structuredContent` (modern clients) and a text fallback (legacy clients); tool errors use `isError: true`, distinct from JSON-RPC protocol errors.
+
+### What's deliberately NOT exposed
+
+- **Write tools** (`trigger_check`, `execute_action`) — Phase 2 (#37), gated behind a week of production soak
+- **`update_*` / `delete_*` on WANs and actions** — too destructive for an unsupervised agent
+- **Decrypted secrets, the DB encryption key, the data directory** — masked or unreferenced
+
+### Enable it
+
+Add to `.env` (or your compose environment):
+
+```bash
+MCP_HTTP_PORT=7374
+MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+```
+
+Then `docker compose pull && docker compose up -d`. The MCP endpoint comes up alongside the Web UI; `curl http://localhost:7374/healthz` returns `ok`.
+
+### Connect Claude Code
+
+In your `~/.claude.json` (or workspace `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "wan-ip-check": {
+      "url": "http://192.168.5.208:7374/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer <your MCP_AUTH_TOKEN>"
+      }
+    }
+  }
+}
+```
+
+Replace the URL and token with your prod values. After restart, Claude Code discovers the tools automatically — try `list_wan_interfaces` to confirm.
+
+### Connect other clients
+
+Any client that speaks MCP Streamable HTTP works. Examples:
+
+```bash
+# List tools
+curl -X POST http://localhost:7374/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Call a tool
+curl -X POST http://localhost:7374/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+       "params":{"name":"get_recent_history","arguments":{"wan_id":1,"limit":10}}}'
+```
+
+stdio transport is also wired for clients that the prefer subprocess model — the process reads JSON-RPC from stdin and writes responses to stdout. Phase 2 will add per-token rate limiting; Phase 1 is unbounded by design until you've validated the auth and masking surfaces.
+
+### Security
+
+- **Bearer token enforced** by default. Missing token → `401` with `WWW-Authenticate: Bearer`. Constant-time comparison via `crypto/subtle.ConstantTimeCompare` (no timing oracle).
+- **Dev mode**: if `MCP_AUTH_TOKEN` is unset the server logs a warning and serves unauthenticated. Use only for local debugging.
+- **Reverse proxy recommended**: put the MCP port behind nginx/caddy to enforce network ACL + TLS. The bearer token is the second layer, not the first.
+- **Secret-masking test** in `mcp_server_test.go` proves no `api_token` / `webhook_url` / `IsSecret` field ever reaches any content block — including `structuredContent`, which modern clients consume directly.
 
 ## Docker Hub
 
@@ -231,6 +316,10 @@ wan-ip-check/
 ├── action_webhook.go              # HTTP webhook with template body
 ├── crypto.go                      # AES-256-GCM
 ├── server.go                      # HTTP server, routing, middleware
+├── mcp_server.go                  # MCP server (2026-07-28 spec) registration + transports
+├── mcp_tools.go                   # MCP read-tool implementations
+├── mcp_auth.go                    # MCP bearer-token middleware
+├── mcp_server_test.go             # MCP masking, annotations, auth tests
 ├── handlers_api.go                # REST API handlers
 ├── handlers_ui.go                 # Web UI + HTMX partial handlers
 ├── templates/                     # Go HTML templates (embedded)
