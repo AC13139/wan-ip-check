@@ -240,23 +240,24 @@ Then `docker compose pull && docker compose up -d`. The MCP endpoint comes up al
 
 ### Connect Claude Code
 
-In your `~/.claude.json` (or workspace `.mcp.json`):
+**Project scope** (recommended for solo use): copy `.mcp.json.example` to `.mcp.json` and edit. `.mcp.json` is gitignored.
 
-```json
-{
-  "mcpServers": {
-    "wan-ip-check": {
-      "url": "http://192.168.5.208:7374/mcp",
-      "transport": "streamable-http",
-      "headers": {
-        "Authorization": "Bearer <your MCP_AUTH_TOKEN>"
-      }
-    }
-  }
-}
+```bash
+cp .mcp.json.example .mcp.json
+# Default uses ${WAN_IP_CHECK_MCP_TOKEN} env var — export it in your shell:
+export WAN_IP_CHECK_MCP_TOKEN="<your MCP_AUTH_TOKEN value>"
+claude
 ```
 
-Replace the URL and token with your prod values. After restart, Claude Code discovers the tools automatically — try `list_wan_interfaces` to confirm.
+Verify with `/mcp` — `wan-ip-check` should show `Connected`. Test by asking:
+
+```
+Use the list_wan_interfaces MCP tool and report the current IP for each WAN.
+```
+
+For plaintext token in the file instead of env-var, edit `.mcp.json` and replace `${WAN_IP_CHECK_MCP_TOKEN}` with the literal token.
+
+**User scope** (available across all your projects): `claude mcp add --scope user --transport streamable-http wan-ip-check http://localhost:7374/mcp` then add the bearer token via `claude mcp edit`.
 
 ### Connect other clients
 

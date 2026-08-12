@@ -1,0 +1,42 @@
+// .mcp.json — Claude Code project-scoped MCP server config.
+// Copy this file to `.mcp.json` and edit. `.mcp.json` is gitignored
+// so the bearer token does not leak via git.
+//
+// ─── Token handling ────────────────────────────────────────────────────────
+// By default the Authorization header references the
+// WAN_IP_CHECK_MCP_TOKEN environment variable. Set it in your shell
+// before launching Claude Code:
+//
+//     export WAN_IP_CHECK_MCP_TOKEN="<your token>"
+//     claude
+//
+// This is the safest pattern — the token never lands in any file
+// Claude Code reads.
+//
+// If you prefer a literal token in the file (e.g. for a shared CI
+// runner where the env var can't be set per-invocation), replace the
+// `${WAN_IP_CHECK_MCP_TOKEN}` placeholder below with the token
+// directly.
+//
+// ─── Endpoint ──────────────────────────────────────────────────────────────
+// Replace the URL below with your wan-ip-check host. Common options:
+//
+//     http://localhost:7374/mcp                # local dev (same machine)
+//     http://your-hostname.local:7374/mcp      # LAN / mDNS
+//     https://wanip.example.com/mcp            # behind a reverse proxy
+//
+// ─── What's exposed ────────────────────────────────────────────────────────
+// See README.md § "MCP Server for AI Agents" for the full tool list.
+// All 6 tools are read-only (no destructive writes). Secrets returned
+// by list_actions are masked via the existing maskSecrets helper.
+{
+  "mcpServers": {
+    "wan-ip-check": {
+      "url": "http://localhost:7374/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer ${WAN_IP_CHECK_MCP_TOKEN}"
+      }
+    }
+  }
+}

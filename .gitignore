@@ -49,3 +49,5 @@ AGENTS.md
 .codex
 .codex/
 CLAUDE.md
+# MCP server config — likely contains bearer tokens
+.mcp.json

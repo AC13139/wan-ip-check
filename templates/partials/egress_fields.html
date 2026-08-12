@@ -23,7 +23,7 @@
 <div class="form-group">
   <label class="form-label">Gateway IP</label>
   <input type="text" name="egress_gateway" class="form-input mono" required
-         value="{{.Gateway}}" placeholder="e.g., 192.168.5.6">
+         value="{{.Gateway}}" placeholder="e.g., 192.168.1.1">
   <div class="form-help">Requires NET_ADMIN capability in the container</div>
 </div>
 {{else if eq .Mode "proxy"}}

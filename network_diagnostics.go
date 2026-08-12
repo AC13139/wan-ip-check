@@ -112,7 +112,7 @@ func detectDockerNetworkMode(ifaces []NetworkInterface) DockerNetwork {
 // detectDefaultGateway shells out to `ip route show default` to discover the
 // first IPv4 default gateway. Returns empty string on any failure.
 //
-// Output format: "default via 192.168.5.1 dev eth0 proto dhcp src 192.168.5.208 ..."
+// Output format: "default via 192.168.x.1 dev eth0 proto dhcp src 192.168.x.y ..."
 func detectDefaultGateway(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
