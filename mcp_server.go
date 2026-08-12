@@ -139,13 +139,18 @@ func (m *MCPServer) ServeStdio(ctx context.Context) error {
 	return server.ServeStdio(m.mcp)
 }
 
-// ServeHTTP runs the MCP server over HTTP on the given port. Bearer token
-// auth enforced via middleware unless the token is empty (dev mode only —
-// logs a warning). Returns when the listener stops.
-func (m *MCPServer) ServeHTTP(ctx context.Context, port string) error {
+// Handler returns the bearer-auth-wrapped MCP HTTP handler. The main
+// HTTP server registers it on its own mux (before the CSRF catch-all),
+// so the MCP endpoint is reachable on the same port as the Web UI —
+// no reverse-proxy tweaks required.
+//
+// Bearer token enforced via middleware unless the env var is empty
+// (dev mode only — logs a warning). The token is read from the same
+// MCP_AUTH_TOKEN env var as before.
+func (m *MCPServer) Handler() http.Handler {
 	token := os.Getenv("MCP_AUTH_TOKEN")
 	if token == "" {
-		m.logger.Warn("MCP_HTTP_AUTH_TOKEN unset — MCP HTTP endpoint is unauthenticated. Set MCP_AUTH_TOKEN before exposing this port.")
+		m.logger.Warn("MCP_AUTH_TOKEN unset — MCP endpoint is unauthenticated. Set MCP_AUTH_TOKEN before exposing it.")
 	}
 
 	streamable := server.NewStreamableHTTPServer(m.mcp,
@@ -154,26 +159,14 @@ func (m *MCPServer) ServeHTTP(ctx context.Context, port string) error {
 		}),
 	)
 
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", bearerAuth(token, streamable))
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	m.logger.Info("MCP HTTP handler ready", "auth", token != "")
+	return bearerAuth(token, streamable)
+}
+
+// Healthz returns a tiny readiness handler for the MCP server. Useful as
+// a reverse-proxy healthcheck independent of any registered MCP route.
+func (m *MCPServer) Healthz() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "ok")
 	})
-
-	httpSrv := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
-	}
-
-	m.logger.Info("MCP HTTP server starting", "port", port, "auth", token != "")
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- httpSrv.ListenAndServe() }()
-
-	select {
-	case <-ctx.Done():
-		return httpSrv.Shutdown(context.Background())
-	case err := <-errCh:
-		return err
-	}
 }

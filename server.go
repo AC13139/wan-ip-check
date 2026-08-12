@@ -15,12 +15,14 @@ type Server struct {
 	app        *App
 	dispatcher *Dispatcher
 	templates  *Templates
+	mcp        *MCPServer // nil = MCP disabled
 	httpServer *http.Server
 	logger     *slog.Logger
 }
 
 // NewServer creates a new HTTP server with all routes registered.
-func NewServer(app *App, dispatcher *Dispatcher) (*Server, error) {
+// mcp may be nil if MCP is disabled (e.g., MCP_DISABLED=1).
+func NewServer(app *App, dispatcher *Dispatcher, mcp *MCPServer) (*Server, error) {
 	templates, err := loadTemplates()
 	if err != nil {
 		return nil, fmt.Errorf("loading templates: %w", err)
@@ -30,6 +32,7 @@ func NewServer(app *App, dispatcher *Dispatcher) (*Server, error) {
 		app:        app,
 		dispatcher: dispatcher,
 		templates:  templates,
+		mcp:        mcp,
 		logger:     app.logger,
 	}
 
@@ -40,6 +43,14 @@ func NewServer(app *App, dispatcher *Dispatcher) (*Server, error) {
 
 	// API routes (JSON, no CSRF)
 	s.registerAPIRoutes(mux)
+
+	// MCP endpoint (no CSRF — Streamable HTTP clients POST a JSON-RPC
+	// body with no cookie, which the CSRF middleware would reject).
+	// Registered BEFORE the `/` catch-all so CSRF doesn't apply.
+	if s.mcp != nil {
+		mux.Handle("/mcp", s.mcp.Handler())
+		mux.Handle("/mcp/healthz", s.mcp.Healthz())
+	}
 
 	// UI routes (HTML, CSRF-protected)
 	uiMux := http.NewServeMux()

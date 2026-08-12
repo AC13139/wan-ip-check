@@ -26,10 +26,12 @@
 // directly.
 //
 // ─── Endpoint ──────────────────────────────────────────────────────────────
-// Replace the URL below with your wan-ip-check host. Common options:
+// Replace the URL below with your wan-ip-check host. The MCP endpoint
+// lives at /mcp on the SAME port as the Web UI (7373) — no second
+// port to remember.
 //
-//     http://localhost:7374/mcp                # local dev (same machine)
-//     http://your-hostname.local:7374/mcp      # LAN / mDNS
+//     http://localhost:7373/mcp                # local dev (same machine)
+//     http://your-hostname.local:7373/mcp      # LAN / mDNS
 //     https://wanip.example.com/mcp            # behind a reverse proxy
 //
 // ─── What's exposed ────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@
   "mcpServers": {
     "wan-ip-check": {
       "type": "http",
-      "url": "http://localhost:7374/mcp",
+      "url": "http://localhost:7373/mcp",
       "transport": "streamable-http",
       "headers": {
         "Authorization": "Bearer ${WAN_IP_CHECK_MCP_TOKEN}"

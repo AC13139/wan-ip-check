@@ -183,7 +183,6 @@ Every check outcome is recorded — even unchanged ok results — and merged wit
 | `DATA_DIR` | `./data` | SQLite + encryption key directory |
 | `DISCORD_PROXY` | — | Global HTTP proxy for Discord actions |
 | `ENCRYPTION_KEY` | auto-generated | 32-byte hex AES key (optional pin) |
-| `MCP_HTTP_PORT` | `7374` | MCP server port; set `MCP_DISABLED=1` to suppress |
 | `MCP_AUTH_TOKEN` | _empty = dev mode_ | Bearer token for the MCP endpoint. Generate with `openssl rand -hex 32` |
 
 ### Upgrade / Migration
@@ -206,7 +205,9 @@ curl http://localhost:7373/api/network/diagnostics     # runtime + caps + recomm
 
 ## MCP Server for AI Agents
 
-A read-only [Model Context Protocol](https://modelcontextprotocol.io/) server runs alongside the Web UI on a separate port (default `7374`). It implements the [2026-07-28 MCP spec](https://modelcontextprotocol.io/specification/2026-07-28) and exposes wan-ip-check state to any MCP-compatible client (Claude Code, custom agents, IDE plugins) — no hardcoded URLs, no manual JSON parsing.
+A read-only [Model Context Protocol](https://modelcontextprotocol.io/) server runs alongside the Web UI on the **same port** (default `7373`) at `/mcp`. It implements the [2026-07-28 MCP spec](https://modelcontextprotocol.io/specification/2026-07-28) and exposes wan-ip-check state to any MCP-compatible client (Claude Code, custom agents, IDE plugins) — no hardcoded URLs, no manual JSON parsing.
+
+Same port as the Web UI on purpose: any reverse proxy in front of `7373` already covers `/mcp`, no second port to remember to firewall or to add a route for. The MCP handler is registered before the CSRF catch-all so clients can POST without a CSRF cookie.
 
 ### What's exposed
 
@@ -232,11 +233,23 @@ All six tools declare `readOnlyHint=true`, `destructiveHint=false`, `idempotentH
 Add to `.env` (or your compose environment):
 
 ```bash
-MCP_HTTP_PORT=7374
 MCP_AUTH_TOKEN=$(openssl rand -hex 32)
 ```
 
-Then `docker compose pull && docker compose up -d`. The MCP endpoint comes up alongside the Web UI; `curl http://localhost:7374/healthz` returns `ok`.
+Then `docker compose pull && docker compose up -d`. The MCP endpoint comes up on the same port as the Web UI:
+
+```bash
+# Readiness — no auth required
+curl http://localhost:7373/mcp/healthz
+# → ok
+
+# MCP request — requires bearer token
+curl -X POST http://localhost:7373/mcp \
+  -H "Authorization: Bearer $MCP_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
 
 ### Connect Claude Code
 

@@ -136,8 +136,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start HTTP server (API + Web UI)
-	srv, err := NewServer(app, dispatcher)
+	// Start MCP server. Wired into the main HTTP mux (port 7373) at
+	// /mcp so it shares the same reverse-proxy surface as the UI and
+	// REST API — no second port to firewall. Bearer-token auth via
+	// MCP_AUTH_TOKEN env var. Set MCP_DISABLED=1 to suppress entirely.
+	var mcpSrv *MCPServer
+	if os.Getenv("MCP_DISABLED") != "1" {
+		mcpSrv = NewMCPServer(app)
+	} else {
+		logger.Info("MCP_DISABLED=1 — MCP endpoint will not be served")
+	}
+
+	// Start HTTP server (API + Web UI + MCP, all on the same port)
+	srv, err := NewServer(app, dispatcher, mcpSrv)
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)
@@ -148,25 +159,7 @@ func main() {
 		}
 	}()
 
-	// Start MCP server. If MCP_HTTP_PORT is set, expose over HTTP (bearer
-	// token auth via MCP_AUTH_TOKEN env var). stdio is always wired in
-	// case the process is launched in stdio MCP mode (Claude Code does
-	// this — sets MCP_TRANSPORT=stdio or similar — but the common case
-	// here is HTTP for general agent use, gated by the env var).
-	mcpSrv := NewMCPServer(app)
-	mcpHTTPPort := os.Getenv("MCP_HTTP_PORT")
-	if mcpHTTPPort == "" {
-		mcpHTTPPort = "7374"
-	}
-	if os.Getenv("MCP_DISABLED") != "1" {
-		go func() {
-			if err := mcpSrv.ServeHTTP(ctx, mcpHTTPPort); err != nil {
-				logger.Error("MCP HTTP server failed", "error", err)
-			}
-		}()
-	}
-
-	logger.Info("wan-ip-check running", "port", boot.Port, "mcp_http_port", mcpHTTPPort)
+	logger.Info("wan-ip-check running", "port", boot.Port)
 
 	// Block until signal
 	<-ctx.Done()
