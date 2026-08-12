@@ -152,6 +152,17 @@ func (e *CFDNSExecutor) Execute(ctx context.Context, event IPEvent, raw json.Raw
 		return fmt.Errorf("parsing config: %w", err)
 	}
 
+	// Resolve missing zone name once per Execute. Without it, the wildcard
+	// record "*" canonicalizes to "" and fails with a cryptic "empty name"
+	// error — see #36. TestConfig already does this; Execute must too.
+	if cfg.ZoneName == "" {
+		name, err := fetchZoneName(ctx, e.client, cfg.APIToken, cfg.ZoneID)
+		if err != nil {
+			return fmt.Errorf("resolving zone name (required for wildcard '@' and '*' records): %w", err)
+		}
+		cfg.ZoneName = name
+	}
+
 	// Legacy path — unchanged behavior until the user resaves.
 	if len(cfg.Records) == 0 && len(cfg.RecordIDs) > 0 {
 		return e.executeLegacy(ctx, cfg, event.NewIP)

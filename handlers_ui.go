@@ -205,6 +205,7 @@ type WANInterfaceDisplay struct {
 	Stale            bool   // true when last success older than StaleAfterSeconds (#15)
 	StaleAge         string // human-readable age for the badge tooltip
 	ActionCount      int
+	AbandonedCount   int    // #36: number of action_runs abandoned after max retries
 }
 
 func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
@@ -234,6 +235,7 @@ func (s *Server) buildWANInterfaceDisplay(wi WANInterface) WANInterfaceDisplay {
 	}
 	count, _ := s.app.db.GetWANInterfaceLinkedActionCount(wi.ID)
 	wd.ActionCount = count
+	wd.AbandonedCount, _ = s.app.db.CountAbandonedRuns(wi.ID)
 	wd.IPAdvisory = IPAdvisory(wd.IP)
 
 	// Staleness (#15): flagged when the WAN is enabled, the user has opted

@@ -55,6 +55,28 @@ func (db *DB) migrate() error {
 	if _, err := db.conn.Exec(schema); err != nil {
 		return err
 	}
+	if err := db.migrateAddRetryCount(); err != nil {
+		return fmt.Errorf("adding retry_count column: %w", err)
+	}
+	return nil
+}
+
+// migrateAddRetryCount adds the retry_count column to action_runs on
+// databases created before the column existed (#36). Idempotent.
+func (db *DB) migrateAddRetryCount() error {
+	var n string
+	err := db.conn.QueryRow(
+		"SELECT name FROM pragma_table_info(?) WHERE name = ?",
+		"action_runs", "retry_count",
+	).Scan(&n)
+	if err == sql.ErrNoRows {
+		db.logger.Info("migrating: adding retry_count column to action_runs")
+		_, err = db.conn.Exec("ALTER TABLE action_runs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+		return err
+	}
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -205,6 +227,7 @@ CREATE TABLE IF NOT EXISTS action_runs (
     new_ip           TEXT,
     status           TEXT NOT NULL,
     needs_retry      INTEGER NOT NULL DEFAULT 0,
+    retry_count      INTEGER NOT NULL DEFAULT 0,
     error_msg        TEXT,
     executed_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -694,11 +717,14 @@ func (db *DB) GetRecentRuns(wanInterfaceID int64, limit int) ([]ActionRun, error
 }
 
 // GetFailedRuns returns action runs that need retry for a WAN interface.
+// Rows that have been abandoned (status = 'abandoned' after exceeding
+// the max retry count) are excluded so the dispatcher stops hammering
+// them (#36).
 func (db *DB) GetFailedRuns(wanInterfaceID int64) ([]ActionRunWithType, error) {
 	rows, err := db.conn.Query(
-		`SELECT ar.id, ar.wan_interface_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip, a.type
+		`SELECT ar.id, ar.wan_interface_id, ar.action_id, ar.event_type, ar.old_ip, ar.new_ip, ar.retry_count, a.type
 		 FROM action_runs ar JOIN actions a ON a.id = ar.action_id
-		 WHERE ar.wan_interface_id = ? AND ar.needs_retry = 1
+		 WHERE ar.wan_interface_id = ? AND ar.needs_retry = 1 AND ar.status != 'abandoned'
 		 ORDER BY ar.executed_at ASC LIMIT 10`,
 		wanInterfaceID,
 	)
@@ -711,7 +737,7 @@ func (db *DB) GetFailedRuns(wanInterfaceID int64) ([]ActionRunWithType, error) {
 	for rows.Next() {
 		var r ActionRunWithType
 		var oldIP, newIP sql.NullString
-		if err := rows.Scan(&r.ID, &r.WANInterfaceID, &r.ActionID, &r.EventType, &oldIP, &newIP, &r.ActionType); err != nil {
+		if err := rows.Scan(&r.ID, &r.WANInterfaceID, &r.ActionID, &r.EventType, &oldIP, &newIP, &r.RetryCount, &r.ActionType); err != nil {
 			return nil, err
 		}
 		r.OldIP = oldIP.String
@@ -721,9 +747,73 @@ func (db *DB) GetFailedRuns(wanInterfaceID int64) ([]ActionRunWithType, error) {
 	return runs, rows.Err()
 }
 
-// ClearRetryFlag marks an action run as no longer needing retry.
+// IncrementRetryCount bumps retry_count on the original failed row.
+// Returns the new retry_count value.
+func (db *DB) IncrementRetryCount(runID int64) (int, error) {
+	_, err := db.conn.Exec(
+		"UPDATE action_runs SET retry_count = retry_count + 1 WHERE id = ?",
+		runID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.conn.QueryRow("SELECT retry_count FROM action_runs WHERE id = ?", runID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// MarkAbandoned flips the original failed row to status='abandoned' so
+// GetFailedRuns stops returning it and the dispatcher stops hammering
+// Cloudflare/Discord for an action that consistently fails (#36).
+func (db *DB) MarkAbandoned(runID int64, reason string) error {
+	_, err := db.conn.Exec(
+		"UPDATE action_runs SET status = 'abandoned', needs_retry = 0, error_msg = ? WHERE id = ?",
+		"abandoned after max retries: "+reason, runID,
+	)
+	return err
+}
+
+// CountAbandonedRuns returns how many abandoned action runs exist for a
+// given WAN interface. Used by the WAN card badge to flag persistent
+// failures needing user attention (#36).
+func (db *DB) CountAbandonedRuns(wanInterfaceID int64) (int, error) {
+	var n int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM action_runs WHERE wan_interface_id = ? AND status = 'abandoned'",
+		wanInterfaceID,
+	).Scan(&n)
+	return n, err
+}
+
+// ClearRetryFlag marks an action run as no longer needing retry. Also wipes
+// the stale error_msg — leaving the old failure text on a row that's now
+// status='success' was misleading the History page (production saw rows
+// like {status:success, error_msg:"sending Discord webhook failed..."}).
 func (db *DB) ClearRetryFlag(runID int64) error {
-	_, err := db.conn.Exec("UPDATE action_runs SET needs_retry = 0, status = 'success' WHERE id = ?", runID)
+	_, err := db.conn.Exec(
+		"UPDATE action_runs SET needs_retry = 0, status = 'success', error_msg = '' WHERE id = ?",
+		runID,
+	)
+	return err
+}
+
+// LogRetryAttempt writes a new action_runs row that documents a retry
+// attempt against the original failed row. status is "retry_success" or
+// "retry_failed"; the original row's needs_retry stays 1 (still queued
+// for the next cron tick) until a retry actually succeeds.
+//
+// The original_run_id is recorded so the UI can collapse the chain into
+// a single visual row when desired. Zero means "no parent".
+func (db *DB) LogRetryAttempt(run *ActionRun) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO action_runs (wan_interface_id, action_id, event_type, old_ip, new_ip, status, needs_retry, error_msg)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+		run.WANInterfaceID, run.ActionID, run.EventType,
+		nullStr(run.OldIP), nullStr(run.NewIP),
+		run.Status, nullStr(run.ErrorMsg),
+	)
 	return err
 }
 

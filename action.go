@@ -54,6 +54,7 @@ type ActionRunWithType struct {
 	OldIP          string `json:"old_ip"`
 	NewIP          string `json:"new_ip"`
 	ActionType     string `json:"action_type"`
+	RetryCount     int    `json:"retry_count"`
 }
 
 // IPEvent carries event data passed to action executors.

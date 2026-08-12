@@ -28,6 +28,9 @@
       <div class="wi-meta-row">
         <span class="badge {{.StatusBadgeClass}}">{{.StatusText}}</span>
         {{if .Stale}}<span class="badge badge-warning" title="No successful check for {{.StaleAge}}">stale · {{.StaleAge}}</span>{{end}}
+        {{if gt .AbandonedCount 0}}<a href="/history?wan_interface={{.WANInterface.ID}}&status=abandoned"
+                                       class="badge badge-warning"
+                                       title="{{.AbandonedCount}} action run(s) abandoned after max retries — see History">{{.AbandonedCount}} abandoned</a>{{end}}
         {{if .LastCheck}}<span class="text-sm text-muted">Last check: {{.LastCheck}}</span>{{end}}
         <span class="text-sm text-muted">{{.ActionCount}} linked action{{if ne .ActionCount 1}}s{{end}}</span>
       </div>

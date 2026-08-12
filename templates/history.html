@@ -35,6 +35,7 @@
       <option value="">All Statuses</option>
       <option value="success">Success</option>
       <option value="failed">Failed</option>
+      <option value="abandoned">Abandoned</option>
     </select>
   </div>
 </div>
@@ -93,9 +94,12 @@
   <td>{{if .ActionName}}{{.ActionName}}{{else}}<span class="text-muted">—</span>{{end}}</td>
   <td>
     {{if eq .Status "success"}}<span class="badge badge-success">success</span>
+    {{else if eq .Status "retry_success"}}<span class="badge badge-success">success (retry)</span>
     {{else if eq .Status "ok"}}<span class="badge badge-success">ok</span>
     {{else if eq .Status "changed"}}<span class="badge badge-info">changed</span>
     {{else if eq .Status "failed"}}<span class="badge badge-error">failed</span>
+    {{else if eq .Status "retry_failed"}}<span class="badge badge-error">failed (retry)</span>
+    {{else if eq .Status "abandoned"}}<span class="badge badge-warning">abandoned</span>
     {{else}}<span class="badge badge-muted">{{.Status}}</span>{{end}}
   </td>
   <td class="text-sm text-error">{{if .ErrorMsg}}{{.ErrorMsg}}{{end}}</td>

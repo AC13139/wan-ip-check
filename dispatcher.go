@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -423,8 +424,11 @@ func (d *Dispatcher) checkWANInterface(ctx context.Context, wanInterfaceID int64
 		return
 	}
 
-	// Retry any previously failed actions for this WAN interface
-	d.retryFailed(ctx, wanInterfaceID, state.LastObservedIP, logger)
+	// Retry any previously failed actions for this WAN interface. Pass
+	// the *current* observed IP, not the stale IPs saved on the failed
+	// run — by the time we get here, the IP may have changed again and
+	// the saved OldIP/NewIP would point retries at the wrong target.
+	d.retryFailed(ctx, wanInterfaceID, newIP, logger)
 
 	if newIP != oldIP {
 		// IP changed
@@ -555,7 +559,11 @@ func (d *Dispatcher) executeActions(ctx context.Context, event IPEvent, logger *
 	}
 }
 
-// retryFailed re-executes actions that failed on the previous check for this WAN interface.
+// retryFailed re-executes actions that failed on the previous check for this
+// WAN interface. The currentIP parameter is the *currently observed* public
+// IP — we use it as event.NewIP so a retry after a subsequent IP change
+// pushes the right value, not the stale one saved on the original failed
+// row.
 func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, currentIP string, logger *slog.Logger) {
 	failedRuns, err := d.db.GetFailedRuns(wanInterfaceID)
 	if err != nil || len(failedRuns) == 0 {
@@ -563,7 +571,21 @@ func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, curr
 	}
 
 	logger.Info("retrying failed actions", "count", len(failedRuns))
+	maxRetries := d.maxRetries()
 	for _, run := range failedRuns {
+		// Pre-flight: if the row is at or past the cap, abandon it. This
+		// catches rows whose retry_count was incremented past the cap by
+		// the previous cron tick, and any orphan rows left over from
+		// before this feature shipped (retry_count=0 → first failure).
+		if run.RetryCount >= maxRetries {
+			logger.Warn("abandoning failed action after max retries",
+				"action_id", run.ActionID, "retries", run.RetryCount, "max", maxRetries)
+			if err := d.db.MarkAbandoned(run.ID, "max retries exceeded"); err != nil {
+				logger.Error("failed to mark abandoned", "run_id", run.ID, "error", err)
+			}
+			continue
+		}
+
 		executor, err := d.registry.Get(run.ActionType)
 		if err != nil {
 			continue
@@ -584,17 +606,65 @@ func (d *Dispatcher) retryFailed(ctx context.Context, wanInterfaceID int64, curr
 			WANInterfaceName: "retry",
 			EventType:        run.EventType,
 			OldIP:            run.OldIP,
-			NewIP:            run.NewIP,
+			NewIP:            currentIP, // current, not stale
 			Timestamp:        time.Now().UTC().Format(time.RFC3339),
 		}
 
 		if err := executor.Execute(ctx, event, decryptedConfig); err != nil {
 			logger.Warn("retry still failed", "action_id", run.ActionID, "error", err)
+			// Bump retry_count on the ORIGINAL row so we eventually hit
+			// the cap and stop retrying (#36).
+			newCount, countErr := d.db.IncrementRetryCount(run.ID)
+			if countErr != nil {
+				logger.Error("failed to increment retry_count", "run_id", run.ID, "error", countErr)
+			}
+			// Record the retry attempt so the History timeline shows it.
+			d.db.LogRetryAttempt(&ActionRun{
+				WANInterfaceID: wanInterfaceID,
+				ActionID:       run.ActionID,
+				EventType:      run.EventType,
+				OldIP:          run.OldIP,
+				NewIP:          currentIP,
+				Status:         "retry_failed",
+				ErrorMsg:       err.Error(),
+			})
+			// If this was the last allowed attempt, mark abandoned now so
+			// the very next cron tick skips it (rather than waiting for
+			// the pre-flight check above to notice).
+			if newCount >= maxRetries {
+				logger.Warn("reached max retries, abandoning",
+					"action_id", run.ActionID, "retries", newCount)
+				if mErr := d.db.MarkAbandoned(run.ID, err.Error()); mErr != nil {
+					logger.Error("failed to mark abandoned", "run_id", run.ID, "error", mErr)
+				}
+			}
 		} else {
 			logger.Info("retry succeeded", "action_id", run.ActionID)
+			d.db.LogRetryAttempt(&ActionRun{
+				WANInterfaceID: wanInterfaceID,
+				ActionID:       run.ActionID,
+				EventType:      run.EventType,
+				OldIP:          run.OldIP,
+				NewIP:          currentIP,
+				Status:         "retry_success",
+			})
 			d.db.ClearRetryFlag(run.ID)
 		}
 	}
+}
+
+// maxRetries returns the configured max-retry count, falling back to the
+// default when the setting is missing or unparseable.
+func (d *Dispatcher) maxRetries() int {
+	v, err := d.db.GetSetting("action.max_retries")
+	if err != nil || v == "" {
+		return 10
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 10
+	}
+	return n
 }
 
 // setupGatewayPBR ensures fwmark-based PBR is configured for gateway mode.
