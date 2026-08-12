@@ -2,6 +2,13 @@
 // Copy this file to `.mcp.json` and edit. `.mcp.json` is gitignored
 // so the bearer token does not leak via git.
 //
+// ─── Required fields ────────────────────────────────────────────────────────
+// Claude Code requires both "type" and "url" on every server entry.
+// "type" must be "http" (or "sse" / "ws" for those transports); without
+// it Claude Code prints "Skipped — has a url but no type" and the server
+// never connects. "transport" is set in addition for documentation but
+// is inferred from "type" when omitted.
+//
 // ─── Token handling ────────────────────────────────────────────────────────
 // By default the Authorization header references the
 // WAN_IP_CHECK_MCP_TOKEN environment variable. Set it in your shell
@@ -32,6 +39,7 @@
 {
   "mcpServers": {
     "wan-ip-check": {
+      "type": "http",
       "url": "http://localhost:7374/mcp",
       "transport": "streamable-http",
       "headers": {
