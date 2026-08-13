@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an enhancement or a new Action type
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. If your request is a **new Action type** (e.g. a DDNS provider, a firewall rule update, a notification target), say so — those get tagged `new-action` and are often a great first PR.
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: What problem are you trying to solve? Who hits this, and how often?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should wan-ip-check do? Keep it concrete — this may become the basis of a PR.
+    validations:
+      required: true
+  - type: textarea
+    id: new-action
+    attributes:
+      label: If this is a new Action type
+      description: Which provider/endpoint? What API does it use, and what permissions does the token need? Any existing documentation links.
+      placeholder: |
+        - Action type: e.g. DuckDNS DDNS
+        - Endpoint / API: …
+        - Required permissions: …
+        - Reference docs: …
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What are you doing today instead, and why isn't that good enough?

@@ -4,6 +4,7 @@ A self-hosted WAN IP monitor with a Web UI that reacts to IP changes. Point any 
 
 [![Docker](https://img.shields.io/docker/pulls/ac13139/wan-ip-check.svg)](https://hub.docker.com/r/ac13139/wan-ip-check)
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 ## Why This Tool?
 
@@ -354,15 +355,33 @@ wan-ip-check/
 ├── static/                        # CSS + HTMX 2.0.4 (embedded)
 ├── Dockerfile
 ├── docker-compose.yml
-└── .github/workflows/
-    ├── docker-publish.yml         # main + v* tags → latest / X.Y.Z / X.Y
-    └── docker-beta.yml            # v2-dev → beta / v2-dev / beta-<sha>
+├── CONTRIBUTING.md                # contribution guide, new-Action-type walkthrough
+├── CODE_OF_CONDUCT.md             # Contributor Covenant
+├── LICENSE                        # GNU GPL v3.0
+└── .github/
+    ├── ISSUE_TEMPLATE/
+    │   ├── bug_report.yml
+    │   └── feature_request.yml
+    ├── PULL_REQUEST_TEMPLATE.md
+    └── workflows/
+        ├── docker-publish.yml     # main + v* tags → latest / X.Y.Z / X.Y
+        └── docker-beta.yml        # v2-dev → beta / v2-dev / beta-<sha>
 ```
 
 ## Issues & Roadmap
 
-File bugs / feature requests at [github.com/AC13139/wan-ip-check/issues](https://github.com/AC13139/wan-ip-check/issues). Current open threads include IPv6 support (#28), event-history auto-recycling (#29), Settings About card (#30), timezone dropdown (#31), and the dashboard redesign (#27).
+File bugs / feature requests at [github.com/AC13139/wan-ip-check/issues](https://github.com/AC13139/wan-ip-check/issues) using the issue templates. The live list of open work (including IPv6 support and the dashboard redesign) is the best view of the roadmap.
+
+Looking for somewhere to start? New Action ideas are tracked under the [`new-action` label](https://github.com/AC13139/wan-ip-check/labels/new-action) — DuckDNS, No-IP, Namecheap, SSH execution, AWS Security Groups, and more are up for grabs. Adding a new Action type is designed to be a contained change: implement one interface, register it, and the UI form, API, history, and encryption all follow automatically.
+
+## Contributing
+
+Contributions are welcome — new Action types, feature enhancements, bug reports, docs, and tests. Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening an issue or PR; it covers the development setup, how to add a new Action type, coding standards, and the commit/PR workflow.
+
+- All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+- wan-ip-check is **GPL-3.0**. By contributing, you agree your contribution is licensed under GPL-3.0 and that you have the right to submit it — this is recorded via a Developer Certificate of Origin (`Signed-off-by`) on each commit. See [CONTRIBUTING.md](CONTRIBUTING.md#license--dco) for details.
+- New code must pass `go vet ./...` and `go test -race ./...` and ship with tests.
 
 ## License
 
-[GNU General Public License v3.0](LICENSE).
+[GNU General Public License v3.0](LICENSE). Contributions are licensed under the same terms.

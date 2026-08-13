@@ -44,6 +44,9 @@ tmp/
 DESIGN.md
 AGENTS.md
 
+# Internal tooling docs (e.g. Stitch sync prompts) — not for public release
+docs/
+
 # Claude / Codex
 .claude/
 .codex
