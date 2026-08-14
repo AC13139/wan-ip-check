@@ -356,6 +356,7 @@ wan-ip-check/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── CONTRIBUTING.md                # contribution guide, new-Action-type walkthrough
+├── CLA.md                         # individual CLA (commercial-edition rights)
 ├── CODE_OF_CONDUCT.md             # Contributor Covenant
 ├── LICENSE                        # GNU GPL v3.0
 └── .github/
@@ -379,7 +380,7 @@ Looking for somewhere to start? New Action ideas are tracked under the [`new-act
 Contributions are welcome — new Action types, feature enhancements, bug reports, docs, and tests. Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** before opening an issue or PR; it covers the development setup, how to add a new Action type, coding standards, and the commit/PR workflow.
 
 - All participants are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
-- wan-ip-check is **GPL-3.0**. By contributing, you agree your contribution is licensed under GPL-3.0 and that you have the right to submit it — this is recorded via a Developer Certificate of Origin (`Signed-off-by`) on each commit. See [CONTRIBUTING.md](CONTRIBUTING.md#license--dco) for details.
+- wan-ip-check is **GPL-3.0** and is also developed in commercial editions. By contributing, you agree to the [Contributor License Agreement](CLA.md) and the Developer Certificate of Origin (`Signed-off-by`), and that your contribution is licensed under GPL-3.0. See [CONTRIBUTING.md](CONTRIBUTING.md#license--dco) for details.
 - New code must pass `go vet ./...` and `go test -race ./...` and ship with tests.
 
 ## License

@@ -5,9 +5,10 @@ self-hosted tool that lives or dies by its **Actions**. The most valuable thing
 you can build here is a new Action type that keeps someone else from running a
 cron job.
 
-By contributing you agree to the [Developer Certificate of Origin](#license-and-dco)
-and that your contribution is licensed under the same [GNU GPL v3](LICENSE) as
-the project. Please read that section before opening a PR.
+By contributing you agree to the [Developer Certificate of Origin](#license-and-dco),
+the [Contributor License Agreement](CLA.md), and that your contribution is
+licensed under the same [GNU GPL v3](LICENSE) as the project. Please read those
+sections before opening a PR.
 
 - [Code of Conduct](#code-of-conduct)
 - [Ways to contribute](#ways-to-contribute)
@@ -205,6 +206,16 @@ behavioral coverage rather than line-count gymnastics.
 Feedback from review is about the change, not the author — don't take it
 personally. If a review asks for a change you disagree with, say so and we'll
 find a middle ground.
+
+## Contributor License Agreement
+
+In addition to the DCO below, contributors must agree to the
+**[Individual Contributor License Agreement](CLA.md)**. The project is developed
+in both a GPL-3.0 community edition and commercial editions, and the CLA grants
+the maintainer the rights needed to use Contributions across those editions
+(something the DCO alone does not do). **Submitting a Contribution constitutes
+acceptance** — see [CLA.md](CLA.md) for the full terms, and check the CLA box in
+the PR template.
 
 ## License & DCO
 

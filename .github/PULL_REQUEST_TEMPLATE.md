@@ -38,9 +38,11 @@ Closes #<!-- issue number, if any -->
 
 <!-- How did you verify this works? -->
 
-## License & DCO
+## License, CLA & DCO
 
 - [ ] I agree that my contribution is licensed under the project's [GNU GPL v3.0](../LICENSE)
+- [ ] I agree to the [Individual Contributor License Agreement](../CLA.md)
+      (submitting the contribution constitutes acceptance)
 - [ ] I have certified the origin of my contribution under the
       [Developer Certificate of Origin 1.1](https://developercertificate.org/) —
       every commit carries a `Signed-off-by` line (`git commit -s`)
