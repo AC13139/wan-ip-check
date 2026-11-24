@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // CFGatewayExecutor updates Cloudflare Zero Trust Gateway DNS location source IP.
@@ -83,25 +84,41 @@ func (e *CFGatewayExecutor) Execute(ctx context.Context, event IPEvent, raw json
 		return fmt.Errorf("GET location failed: %s", cfGWErrMsg(getResp))
 	}
 
-	// Extract location name from GET response (required for PUT)
+	// Extract the location's writable fields from the GET response. PUT is a full
+	// update, so fields we do not echo back are reset to their defaults.
 	var loc cfGWLocation
 	if err := json.Unmarshal(getResp.Result, &loc); err != nil {
 		return fmt.Errorf("parsing location response: %w", err)
 	}
 
-	// PUT with name (required) + updated networks
+	// Preserve client_default: omitting it is interpreted as false, which
+	// Cloudflare rejects for the account's default location with
+	// "Cannot update default location to be non-default".
 	body := map[string]interface{}{
-		"name": loc.Name,
+		"name":           loc.Name,
+		"client_default": loc.ClientDefault,
+		"dns64_enabled":  loc.DNS64Enabled,
+		"ecs_support":    loc.ECSSupport,
 		"networks": []map[string]string{
 			{"network": event.NewIP + "/32"},
 		},
 	}
+	if loc.DNSDestinationIPsID != "" {
+		body["dns_destination_ips_id"] = loc.DNSDestinationIPsID
+	}
+	if hasJSONValue(loc.Endpoints) {
+		body["endpoints"] = loc.Endpoints
+	}
+	if hasJSONValue(loc.MaxTTL) {
+		body["max_ttl"] = loc.MaxTTL
+	}
+
 	putResp, err := e.cfGWRequest(ctx, http.MethodPut, url, cfg.APIToken, body)
 	if err != nil {
 		return fmt.Errorf("PUT location failed: %w", err)
 	}
 	if !putResp.Success {
-		return fmt.Errorf("PUT location failed: %s", cfGWErrMsg(putResp))
+		return fmt.Errorf("PUT location failed: %s", cfGWErrHint(cfGWErrMsg(putResp)))
 	}
 
 	return nil
@@ -114,7 +131,13 @@ type cfGWResponse struct {
 }
 
 type cfGWLocation struct {
-	Name string `json:"name"`
+	Name                string          `json:"name"`
+	ClientDefault       bool            `json:"client_default"`
+	DNSDestinationIPsID string          `json:"dns_destination_ips_id"`
+	DNS64Enabled        bool            `json:"dns64_enabled"`
+	ECSSupport          bool            `json:"ecs_support"`
+	Endpoints           json.RawMessage `json:"endpoints"`
+	MaxTTL              json.RawMessage `json:"max_ttl"`
 }
 
 type cfGWErr struct {
@@ -157,4 +180,20 @@ func cfGWErrMsg(resp *cfGWResponse) string {
 		return resp.Errors[0].Message
 	}
 	return "unknown error"
+}
+
+// cfGWErrHint adds an actionable hint for errors that have a known remedy.
+func cfGWErrHint(msg string) string {
+	if strings.Contains(msg, "default location to be non-default") {
+		return msg + " — the configured location is the account's default location. " +
+			"wan-ip-check preserves client_default on update; if this still fails, " +
+			"create a dedicated non-default location for this WAN."
+	}
+	return msg
+}
+
+// hasJSONValue reports whether a raw JSON field carries a usable value.
+func hasJSONValue(raw json.RawMessage) bool {
+	val := strings.TrimSpace(string(raw))
+	return val != "" && val != "null"
 }
